@@ -24,6 +24,7 @@ public final class Store {
     public String kind = "shell";   // shell ou claude
     public String claudeId;          // conversation Claude reprise au redémarrage
     public boolean claudeStarted;
+    public String titleSeen;         // dernier nom lu dans le titre posé par Claude
   }
 
   public static final class Settings {

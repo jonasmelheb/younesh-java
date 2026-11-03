@@ -266,6 +266,7 @@ final class Younesh extends JFrame implements Sidebar.Actions {
       Term nt = new Term(s, () -> theme, () -> store.settings);
       nt.widget.setBackground(theme.termBg);
       nt.view.setBackground(theme.termBg);
+      nt.widget.getTerminal().addApplicationTitleListener(title -> SwingUtilities.invokeLater(() -> applyClaudeTitle(s, title)));
       terminals.add(nt.view, s.id);
       return nt;
     });
@@ -399,6 +400,29 @@ final class Younesh extends JFrame implements Sidebar.Actions {
       sidebar.repaint();
       updateTopbar();
     }
+  }
+
+  // Claude Code écrit le nom de la session dans le titre du terminal : « ✳ Nom », le symbole tourne
+  // pendant qu'il travaille. On reprend ce nom (après /rename par exemple). Les titres des shells
+  // (chemins, noms de programmes) commencent par une lettre et sont ignorés.
+  private static final java.util.regex.Pattern CLAUDE_TITLE = java.util.regex.Pattern.compile("^[^\\p{L}\\p{N}\\s]\\s+(.+)$");
+
+  static String claudeTitle(String title) {
+    java.util.regex.Matcher m = CLAUDE_TITLE.matcher(title.trim());
+    if (!m.find()) return null;
+    String name = m.group(1).trim();
+    return name.isEmpty() || name.equals("Claude Code") ? null : name;
+  }
+
+  private void applyClaudeTitle(Store.Session s, String title) {
+    String name = claudeTitle(title);
+    // titleSeen évite de réécraser un nom choisi dans Younesh quand Claude renvoie le même titre à la reprise.
+    if (name == null || name.equals(s.titleSeen) || store.session(s.id) == null) return;
+    s.titleSeen = name;
+    s.name = name;
+    sidebar.rebuild();
+    updateTopbar();
+    save();
   }
 
   void restart(Store.Session s) {
