@@ -4,6 +4,7 @@ import com.jediterm.core.Color;
 import com.jediterm.terminal.TerminalColor;
 import com.jediterm.terminal.TextStyle;
 import com.jediterm.terminal.emulator.ColorPalette;
+import com.jediterm.terminal.model.StyleState;
 import com.jediterm.terminal.ui.JediTermWidget;
 import com.jediterm.terminal.ui.settings.DefaultSettingsProvider;
 
@@ -41,7 +42,12 @@ final class Term {
     this.session = session;
     // Maj+Entrée = retour à la ligne dans Claude, même lancé à la main dans un shell.
     // Ailleurs, Échap+Entrée effacerait la ligne de PowerShell : la touche reste normale.
-    this.widget = new JediTermWidget(120, 30, new Settings(theme, settings, () -> "claude".equals(session.kind) || inClaude));
+    this.widget = new JediTermWidget(120, 30, new Settings(theme, settings, () -> "claude".equals(session.kind) || inClaude)) {
+      @Override
+      protected StyleState createDefaultStyle() {
+        return new ThemeStyle();
+      }
+    };
     widget.getTerminal().addApplicationTitleListener(t -> inClaude = CLAUDE_TITLE.matcher(t.trim()).matches());
     this.view = new JPanel(new BorderLayout());
     view.setBorder(BorderFactory.createEmptyBorder(8, 12, 4, 4));
@@ -99,6 +105,28 @@ final class Term {
     widget.getTerminalPanel().repaint();
   }
 
+  // « Remettre les attributs par défaut » (ESC 8 sans position sauvegardée, RIS…) : JediTerm reprend son style
+  // par défaut, noir sur blanc. La console de Windows en envoie au démarrage et tout passait sur fond blanc.
+  // Ici, revenir au défaut veut dire : plus aucune couleur imposée, donc celles du thème.
+  private static final class ThemeStyle extends StyleState {
+    @Override
+    public void reset() {
+      setCurrent(TextStyle.EMPTY);
+    }
+
+    @Override
+    public TerminalColor getDefaultBackground() {
+      Theme t = Ui.t();
+      return TerminalColor.rgb(t.termBg.getRed(), t.termBg.getGreen(), t.termBg.getBlue());
+    }
+
+    @Override
+    public TerminalColor getDefaultForeground() {
+      Theme t = Ui.t();
+      return TerminalColor.rgb(t.termFg.getRed(), t.termFg.getGreen(), t.termFg.getBlue());
+    }
+  }
+
   static final class Settings extends DefaultSettingsProvider {
     private final Supplier<Theme> theme;
     private final Supplier<Store.Settings> settings;
@@ -128,6 +156,11 @@ final class Term {
           return new Color(t.ansi[i].getRGB() & 0xffffff);
         }
       };
+    }
+
+    @Override
+    public TextStyle getDefaultStyle() {
+      return new TextStyle(tc(theme.get().termFg), tc(theme.get().termBg));
     }
 
     @Override
