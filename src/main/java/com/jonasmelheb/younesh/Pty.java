@@ -30,7 +30,7 @@ public final class Pty extends ProcessTtyConnector {
   }
 
   public static Pty start(List<String> command, String cwd, String name, Listener listener) throws IOException {
-    Map<String, String> env = new HashMap<>(System.getenv());
+    Map<String, String> env = cleanEnv(System.getenv());
     env.put("TERM", "xterm-256color");
     env.put("COLORTERM", "truecolor");
     env.put("TERM_PROGRAM", "Younesh");
@@ -42,6 +42,26 @@ public final class Pty extends ProcessTtyConnector {
       .setUseWinConPty(true)
       .start();
     return new Pty(p, name, log(name, listener));
+  }
+
+  // Variables qu'une session Claude Code pose pour ses propres commandes. Si Younesh a été lancé depuis Claude,
+  // les terminaux en héritent et le Claude qu'on y lance se croit « enfant » : il n'enregistre plus la
+  // conversation (plus de reprise) et peut couper les couleurs. Les réglages de l'utilisateur (CLAUDE_CODE_GIT_BASH_PATH…) restent.
+  private static final List<String> CLAUDE_MARKERS = List.of(
+    "CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_EXECPATH", "CLAUDE_CODE_SSE_PORT", "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_BRIDGE_SESSION_ID");
+
+  static Map<String, String> cleanEnv(Map<String, String> parent) {
+    Map<String, String> env = new HashMap<>(parent);
+    boolean fromClaude = env.containsKey("CLAUDECODE") || env.containsKey("CLAUDE_CODE_CHILD_SESSION");
+    CLAUDE_MARKERS.forEach(env::remove);
+    if (fromClaude) {
+      // Posées par l'outil de commandes de Claude, pas par l'utilisateur : un vrai terminal a des couleurs.
+      env.remove("NO_COLOR");
+      env.remove("FORCE_COLOR");
+    }
+    return env;
   }
 
   // YOUNESH_PTY_LOG=1 : copie brute de ce que le terminal reçoit (256 Ko max), pour comprendre un affichage bizarre.

@@ -106,6 +106,7 @@ final class Younesh extends JFrame implements Sidebar.Actions {
       }
     };
     activeDot.setPreferredSize(new Dimension(13, 13));
+    activeDot.setMinimumSize(new Dimension(13, 13));
     activeDot.setMaximumSize(new Dimension(13, 13));
     main.add(topbar(), BorderLayout.NORTH);
     main.add(terminals, BorderLayout.CENTER);
@@ -253,6 +254,7 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     topbar.add(Box.createHorizontalStrut(8));
     topbar.add(title);
     topbar.add(Box.createHorizontalStrut(8));
+    path.setMinimumSize(new Dimension(0, 0));
     topbar.add(path);
     topbar.add(Box.createHorizontalGlue());
     return topbar;
