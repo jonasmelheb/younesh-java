@@ -158,14 +158,15 @@ final class Sbx {
 
   // Sandboxes déjà créées. « sbx ls --json » renvoie une liste ; les anciennes versions l'emballent dans { sandboxes }.
   static List<Existing> list() throws IOException {
-    ProcessBuilder pb = new ProcessBuilder("sbx", "ls", "--json");
+    Map<String, String> env = Pty.freshEnv();
+    ProcessBuilder pb = new ProcessBuilder(Pty.which(env, "sbx"), "ls", "--json");
     pb.environment().clear();
-    pb.environment().putAll(Pty.cleanEnv(System.getenv()));
+    pb.environment().putAll(env);
     Process p;
     try {
       p = pb.start();
     } catch (IOException e) {
-      throw new IOException("sbx est introuvable sur ce PC (ou Younesh a été ouvert avant son installation).");
+      throw new IOException("sbx est introuvable sur ce PC.");
     }
     CompletableFuture<String> out = CompletableFuture.supplyAsync(() -> read(p.getInputStream()));
     CompletableFuture<String> err = CompletableFuture.supplyAsync(() -> read(p.getErrorStream()));

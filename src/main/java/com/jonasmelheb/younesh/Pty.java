@@ -30,7 +30,7 @@ public final class Pty extends ProcessTtyConnector {
   }
 
   public static Pty start(List<String> command, String cwd, String name, Listener listener) throws IOException {
-    Map<String, String> env = cleanEnv(System.getenv());
+    Map<String, String> env = freshEnv();
     env.put("TERM", "xterm-256color");
     env.put("COLORTERM", "truecolor");
     env.put("TERM_PROGRAM", "Younesh");
@@ -62,6 +62,124 @@ public final class Pty extends ProcessTtyConnector {
       env.remove("FORCE_COLOR");
     }
     return env;
+  }
+
+  // Environnement relu dans le registre (freshEnv de main.js), comme Windows Terminal pour chaque onglet :
+  // un programme installé après l'ouverture de Younesh (claude, sbx…) est trouvé. PowerShell plutôt que
+  // reg.exe : il rend les accents des chemins sans dépendre de la page de code de la console.
+  private static final String ENV_SCRIPT = """
+    [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
+    $keys = 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment', 'HKCU:\\Volatile Environment', 'HKCU:\\Environment'
+    $out = for ($i = 0; $i -lt 3; $i++) {
+      $key = Get-Item -LiteralPath $keys[$i] -ErrorAction SilentlyContinue
+      if ($key) { foreach ($n in $key.GetValueNames()) { [pscustomobject]@{ s = $i; n = $n; v = [string]$key.GetValue($n, '', 'DoNotExpandEnvironmentNames') } } }
+    }
+    ConvertTo-Json -Compress -InputObject @($out)""";
+  private static Map<String, String> cachedEnv;
+  private static long cachedAt;
+  private static final java.util.concurrent.atomic.AtomicBoolean refreshing = new java.util.concurrent.atomic.AtomicBoolean();
+
+  // Le premier appel attend la lecture ; ensuite on sert la dernière lecture et on la renouvelle en arrière-plan,
+  // pour ne pas figer la fenêtre pendant que PowerShell démarre.
+  static Map<String, String> freshEnv() {
+    Map<String, String> env;
+    synchronized (Pty.class) {
+      env = cachedEnv;
+    }
+    if (env == null) return new HashMap<>(readEnv());
+    if (System.currentTimeMillis() - cachedAt > 10000) refreshSoon();
+    return new HashMap<>(env);
+  }
+
+  static void refreshSoon() {
+    if (!refreshing.compareAndSet(false, true)) return;
+    Thread t = new Thread(() -> {
+      try {
+        readEnv();
+      } finally {
+        refreshing.set(false);
+      }
+    }, "younesh-env");
+    t.setDaemon(true);
+    t.start();
+  }
+
+  private static Map<String, String> readEnv() {
+    Map<String, String> env = new HashMap<>(System.getenv());
+    if (Shells.WIN) {
+      try {
+        String encoded = java.util.Base64.getEncoder().encodeToString(ENV_SCRIPT.getBytes(StandardCharsets.UTF_16LE));
+        Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded).redirectErrorStream(true).start();
+        p.getOutputStream().close();
+        java.util.concurrent.CompletableFuture<String> out = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+          try {
+            return new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+          } catch (IOException e) {
+            return "";
+          }
+        });
+        if (!p.waitFor(8, java.util.concurrent.TimeUnit.SECONDS)) p.destroyForcibly();
+        else if (p.exitValue() == 0) merge(env, com.google.gson.JsonParser.parseString(out.join().replace("\uFEFF", "").trim()).getAsJsonArray());
+      } catch (IOException | InterruptedException | RuntimeException ignored) {
+      }
+    }
+    Map<String, String> clean = cleanEnv(env);
+    synchronized (Pty.class) {
+      cachedEnv = clean;
+      cachedAt = System.currentTimeMillis();
+    }
+    return clean;
+  }
+
+  // Même ordre que Windows : système, session, puis utilisateur ; le Path de l'utilisateur s'ajoute à celui du système.
+  // Les noms de variables ne tiennent pas compte de la casse sous Windows.
+  static void merge(Map<String, String> env, com.google.gson.JsonArray entries) {
+    String systemPath = "";
+    for (com.google.gson.JsonElement el : entries) {
+      com.google.gson.JsonObject o = el.getAsJsonObject();
+      int scope = o.get("s").getAsInt();
+      String name = o.get("n").getAsString(), value = expand(env, o.get("v").getAsString());
+      if (!name.equalsIgnoreCase("path")) set(env, name, value);
+      else if (scope == 0) set(env, "Path", systemPath = value);
+      else if (scope == 2) set(env, "Path", systemPath.isEmpty() ? value : systemPath + ";" + value);
+    }
+  }
+
+  static String get(Map<String, String> env, String name) {
+    for (Map.Entry<String, String> e : env.entrySet()) if (e.getKey().equalsIgnoreCase(name)) return e.getValue();
+    return null;
+  }
+
+  private static void set(Map<String, String> env, String name, String value) {
+    env.keySet().removeIf(k -> k.equalsIgnoreCase(name));
+    env.put(name, value);
+  }
+
+  private static final java.util.regex.Pattern PERCENT = java.util.regex.Pattern.compile("%([^%]+)%");
+
+  private static String expand(Map<String, String> env, String v) {
+    java.util.regex.Matcher m = PERCENT.matcher(v);
+    StringBuilder out = new StringBuilder();
+    while (m.find()) {
+      String val = get(env, m.group(1));
+      m.appendReplacement(out, java.util.regex.Matcher.quoteReplacement(val != null ? val : m.group()));
+    }
+    m.appendTail(out);
+    return out.toString();
+  }
+
+  // Chemin complet d'un programme d'après le Path donné : Windows cherche sinon dans celui de Younesh, peut-être ancien.
+  static String which(Map<String, String> env, String name) {
+    if (!Shells.WIN) return name;
+    String path = get(env, "Path");
+    if (path != null) for (String dir : path.split(";")) {
+      java.nio.file.Path exe = java.nio.file.Path.of(dir.trim().replace("\"", ""), name + ".exe");
+      try {
+        if (!dir.isBlank() && java.nio.file.Files.isRegularFile(exe)) return exe.toString();
+      } catch (RuntimeException ignored) {
+      }
+    }
+    return name;
   }
 
   // YOUNESH_PTY_LOG=1 : copie brute de ce que le terminal reçoit (256 Ko max), pour comprendre un affichage bizarre.

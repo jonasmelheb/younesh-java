@@ -144,6 +144,7 @@ final class Younesh extends JFrame implements Sidebar.Actions {
 
       @Override
       public void windowActivated(WindowEvent e) {
+        Pty.refreshSoon();
         Term t = terms.get(store.activeId);
         if (t != null && t.attention) {
           t.attention = false;
