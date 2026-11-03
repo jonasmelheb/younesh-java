@@ -41,7 +41,27 @@ public final class Pty extends ProcessTtyConnector {
       .setInitialRows(30)
       .setUseWinConPty(true)
       .start();
-    return new Pty(p, name, listener);
+    return new Pty(p, name, log(name, listener));
+  }
+
+  // YOUNESH_PTY_LOG=1 : copie brute de ce que le terminal reçoit (256 Ko max), pour comprendre un affichage bizarre.
+  private static Listener log(String name, Listener listener) {
+    String env = System.getenv("YOUNESH_PTY_LOG");
+    if (env == null || env.isBlank()) return listener;
+    java.nio.file.Path file = Store.dir().resolve("pty-" + name.replaceAll("[^\\w.-]+", "_") + ".log");
+    long[] written = {0};
+    return (buf, off, len) -> {
+      if (written[0] < 256 * 1024) {
+        try {
+          java.nio.file.Files.createDirectories(file.getParent());
+          java.nio.file.Files.writeString(file, new String(buf, off, len), StandardCharsets.UTF_8,
+            java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
+          written[0] += len;
+        } catch (IOException ignored) {
+        }
+      }
+      listener.onOutput(buf, off, len);
+    };
   }
 
   @Override
