@@ -6,17 +6,22 @@ import com.jediterm.terminal.TextStyle;
 import com.jediterm.terminal.emulator.ColorPalette;
 import com.jediterm.terminal.model.StyleState;
 import com.jediterm.terminal.ui.JediTermWidget;
+import com.jediterm.terminal.ui.TerminalActionPresentation;
 import com.jediterm.terminal.ui.settings.DefaultSettingsProvider;
 
 import javax.swing.BorderFactory;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.KeyStroke;
 import javax.swing.text.StyleContext;
 import java.awt.BorderLayout;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
+import java.awt.event.InputEvent;
+import java.awt.event.KeyEvent;
+import java.util.List;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
@@ -215,6 +220,26 @@ final class Term {
     @Override
     public boolean audibleBell() {
       return false;
+    }
+
+    // Copier / coller façon Windows Terminal, comme la version Electron : Ctrl+V colle, Ctrl+C copie s'il y a
+    // une sélection (sinon c'est l'interruption habituelle). Les variantes avec Maj restent.
+    @Override
+    public TerminalActionPresentation getCopyActionPresentation() {
+      if (!Shells.WIN) return super.getCopyActionPresentation();
+      return new TerminalActionPresentation("Copier", List.of(
+        KeyStroke.getKeyStroke(KeyEvent.VK_C, InputEvent.CTRL_DOWN_MASK),
+        KeyStroke.getKeyStroke(KeyEvent.VK_C, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK)));
+    }
+
+    // Sans texte dans le presse-papiers (une image par exemple), Ctrl+V va au programme : Claude y colle l'image.
+    @Override
+    public TerminalActionPresentation getPasteActionPresentation() {
+      if (!Shells.WIN) return super.getPasteActionPresentation();
+      return new TerminalActionPresentation("Coller", List.of(
+        KeyStroke.getKeyStroke(KeyEvent.VK_V, InputEvent.CTRL_DOWN_MASK),
+        KeyStroke.getKeyStroke(KeyEvent.VK_V, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK),
+        KeyStroke.getKeyStroke(KeyEvent.VK_INSERT, InputEvent.SHIFT_DOWN_MASK)));
     }
 
     @Override

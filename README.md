@@ -46,6 +46,7 @@ Pas encore porté depuis la version Electron : sandboxes sbx, côte à côte, re
 | Renommer | F2 |
 | Aller à la discussion qui attend | Ctrl+Shift+U |
 | Afficher / masquer la barre latérale | Ctrl+Shift+B |
+| Copier / coller | Ctrl+C (avec une sélection) ou Ctrl+Maj+C / Ctrl+V |
 | Nouvelle ligne dans Claude (même lancé à la main dans un shell) | Shift+Entrée |
 
 Clic droit sur une discussion ou un dossier pour toutes les options, double-clic pour renommer, clic molette pour fermer.
