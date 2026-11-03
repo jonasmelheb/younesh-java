@@ -21,16 +21,42 @@ public final class Store {
 
   public static final class Session {
     public String id = uid(), name, folderId, cwd, shell, color, command, claudeArgs;
-    public String kind = "shell";   // shell ou claude
+    public String kind = "shell";   // shell, claude ou sandbox
     public String claudeId;          // conversation Claude reprise au redémarrage
     public boolean claudeStarted;
     public String titleSeen;         // dernier nom lu dans le titre posé par Claude
+    public SbxRef sbx;               // sandbox sbx ouverte par cette discussion
+    public String helper;            // discussion d'appoint sbx (préparation, installation), réutilisée par son nom
+    public Prefill prefill;          // commande à taper au prochain démarrage
+  }
+
+  public static final class SbxRef {
+    public String projet;
+    public boolean created;
+
+    SbxRef(String projet, boolean created) {
+      this.projet = projet;
+      this.created = created;
+    }
+  }
+
+  public static final class Prefill {
+    public String text;
+    public boolean enter;
+
+    Prefill(String text, boolean enter) {
+      this.text = text;
+      this.enter = enter;
+    }
   }
 
   public static final class Settings {
     public String theme = "sombre", fontFamily = "", defaultShell = "", defaultCwd = "";
     public int fontSize = 14, scrollback = 5000, sidebarWidth = 260;
     public boolean notify;   // notification Windows quand Claude attend : désactivée par défaut
+    public Sbx.Config sbx;   // configuration sbx importée ou modifiée (null : celle par défaut)
+    public List<String> sbxLastInstalls = new ArrayList<>();
+    public java.util.Map<String, Boolean> sbxDone = new java.util.HashMap<>();
   }
 
   public List<Folder> folders = new ArrayList<>();
@@ -62,6 +88,8 @@ public final class Store {
         if (s.settings == null) s.settings = new Settings();
         if (s.folders == null) s.folders = new ArrayList<>();
         if (s.sessions == null) s.sessions = new ArrayList<>();
+        if (s.settings.sbxLastInstalls == null) s.settings.sbxLastInstalls = new ArrayList<>();
+        if (s.settings.sbxDone == null) s.settings.sbxDone = new java.util.HashMap<>();
         return s;
       }
     } catch (IOException | RuntimeException ignored) {

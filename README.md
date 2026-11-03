@@ -24,6 +24,7 @@ Si l'affichage d'un terminal est bizarre, lance Younesh avec la variable `YOUNES
 - **Sessions Claude Code** : le bouton ✳ Claude lance `claude` dans le répertoire choisi ; la conversation reprend au prochain lancement.
 - **Claude attend** : la discussion passe en orange quand Claude se tait après avoir répondu (et sur la cloche du terminal). La notification Windows s'active dans les Réglages.
 - `/rename` dans Claude Code renomme la discussion.
+- **Sandbox sbx** (bouton ⧉) : créer une sandbox pour un projet en cochant ce qu'il faut y installer, ou **ouvrir une sandbox existante** (liste tirée de `sbx ls`, même celles créées dans un autre terminal). Clic droit sur une sandbox : rouvrir Claude, installer, supprimer. Comme la version Electron, la configuration est en trois couches (`cli`, `setup`, `installs`), reste sur le PC et s'importe ou s'exporte en JSON (⧉ → Configurer sbx). Variables : `{projet}`, `{dossier}`, `{script}`, et `{secret:NOM}`, demandé au lancement et jamais enregistré.
 - **Liens** : les adresses web dans le terminal sont en bleu souligné ; un clic les ouvre dans le navigateur.
 - **Branche git** sous le nom de chaque discussion, lue directement dans `.git`. Le chemin est dans la barre du haut.
 - **Palette rapide** (Ctrl+Shift+P), recherche dans la barre latérale (sans accents).
@@ -31,7 +32,7 @@ Si l'affichage d'un terminal est bizarre, lance Younesh avec la variable `YOUNES
 - Points d'état : vert = en cours, bleu = nouvelle sortie, rouge = terminé, gris = pas démarré.
 - Tout est enregistré dans `%APPDATA%\younesh-java\younesh.json` (`~/.younesh-java` ailleurs).
 
-Pas encore porté depuis la version Electron : sandboxes sbx, côte à côte, restauration du contenu, import/export, effet Mica.
+Pas encore porté depuis la version Electron : côte à côte, restauration du contenu, import/export, effet Mica.
 
 ## Raccourcis
 

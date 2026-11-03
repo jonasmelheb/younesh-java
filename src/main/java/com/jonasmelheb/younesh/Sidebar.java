@@ -536,11 +536,12 @@ final class Sidebar extends JComponent {
       g.fillRoundRect(r.x - 2, r.y + 6, 3, r.h - 12, 4, 4);
     }
 
-    // Icône du type : ›_ terminal, ✳ Claude.
-    String kind = "claude".equals(s.kind) ? "✳" : "›_";
+    // Icône du type : ›_ terminal, ✳ Claude, ⧉ sandbox.
+    String kind = kindIcon(s);
     Color kc;
     if (s.color != null) kc = colorOf(s.color, t.muted);
     else if ("claude".equals(s.kind)) kc = Theme.CLAUDE;
+    else if ("sandbox".equals(s.kind)) kc = Theme.SANDBOX;
     else if (fc != null) kc = Theme.mix(fc, t.text, 0.8f);
     else kc = t.muted;
     g.setFont(Ui.font(12, false));
@@ -566,6 +567,14 @@ final class Sidebar extends JComponent {
     }
 
     Ui.dot(g, r.x + rw - 8 - 4, cy, term, pulse);
+  }
+
+  static String kindIcon(Store.Session s) {
+    return switch (s.kind == null ? "" : s.kind) {
+      case "claude" -> "✳";
+      case "sandbox" -> "⧉";
+      default -> "›_";
+    };
   }
 
   static String shortPath(String p) {

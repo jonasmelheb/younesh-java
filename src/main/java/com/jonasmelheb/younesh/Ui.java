@@ -372,7 +372,11 @@ final class Ui {
   static final class Modal extends JDialog {
     private final JPanel body = new JPanel();
     private final JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+    private final JPanel extra = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
     private boolean ok;
+    int width = 480;
+    // Vérifie le formulaire avant de fermer : false garde la fenêtre ouverte.
+    java.util.function.BooleanSupplier validate = () -> true;
 
     Modal(JFrame owner, String title, String submit) {
       super(owner, true);
@@ -404,19 +408,29 @@ final class Ui {
       body.setOpaque(false);
       card.add(body, BorderLayout.CENTER);
       actions.setOpaque(false);
-      actions.setBorder(BorderFactory.createEmptyBorder(18, 0, 0, 0));
-      Btn cancel = new Btn("Annuler", Kind.NORMAL);
+      // Sans bouton principal (submit null), un seul bouton « Fermer ».
+      Btn cancel = new Btn(submit == null ? "Fermer" : "Annuler", submit == null ? Kind.PRIMARY : Kind.NORMAL);
       cancel.addActionListener(e -> dispose());
-      Btn go = new Btn(submit, Kind.PRIMARY);
-      go.addActionListener(e -> {
-        ok = true;
-        dispose();
-      });
       actions.add(cancel);
-      actions.add(go);
-      card.add(actions, BorderLayout.SOUTH);
+      if (submit != null) {
+        Btn go = new Btn(submit, Kind.PRIMARY);
+        go.addActionListener(e -> {
+          if (!validate.getAsBoolean()) return;
+          ok = true;
+          dispose();
+        });
+        actions.add(go);
+        getRootPane().setDefaultButton(go);
+      }
+      JPanel bottom = new JPanel(new BorderLayout());
+      bottom.setOpaque(false);
+      bottom.setBorder(BorderFactory.createEmptyBorder(18, 0, 0, 0));
+      extra.setOpaque(false);
+      ((FlowLayout) extra.getLayout()).setHgap(6);
+      bottom.add(extra, BorderLayout.WEST);
+      bottom.add(actions, BorderLayout.EAST);
+      card.add(bottom, BorderLayout.SOUTH);
       setContentPane(card);
-      getRootPane().setDefaultButton(go);
       getRootPane().registerKeyboardAction(e -> dispose(), KeyStroke.getKeyStroke("ESCAPE"), JComponent.WHEN_IN_FOCUSED_WINDOW);
       getRootPane().setWindowDecorationStyle(JRootPane.NONE);
     }
@@ -437,7 +451,7 @@ final class Ui {
       JPanel box = new JPanel(new BorderLayout(0, 5));
       box.setOpaque(false);
       box.add(input, BorderLayout.CENTER);
-      JLabel h = label("<html><div style='width:400px'>" + hint + "</div></html>", 11, null);
+      JLabel h = label("<html><div style='width:" + (width - 80) + "px'>" + hint + "</div></html>", 11, null);
       box.add(h, BorderLayout.SOUTH);
       return field(label, box);
     }
@@ -459,11 +473,25 @@ final class Ui {
       return r;
     }
 
-    boolean open(JFrame owner) {
-      setSize(new Dimension(480, 10));
+    // Boutons supplémentaires à gauche des actions (« Importer… », « Préparer le poste… »).
+    void action(Btn b) {
+      extra.add(b);
+    }
+
+    JPanel body() {
+      return body;
+    }
+
+    // Après un changement du contenu : nouvelle hauteur, même largeur.
+    void refit() {
       pack();
-      setSize(480, getHeight());
-      setLocation(owner.getX() + (owner.getWidth() - 480) / 2, owner.getY() + Math.max(40, (owner.getHeight() - getHeight()) / 2));
+      setSize(width, getHeight());
+    }
+
+    boolean open(JFrame owner) {
+      setSize(new Dimension(width, 10));
+      refit();
+      setLocation(owner.getX() + (owner.getWidth() - width) / 2, owner.getY() + Math.max(40, (owner.getHeight() - getHeight()) / 2));
       Component glass = owner.getGlassPane();
       glass.setVisible(true);
       SwingUtilities.invokeLater(() -> {

@@ -205,8 +205,8 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     quick.setToolTipText("Terminal rapide dans ton dossier personnel (Ctrl+Maj+Q)");
     quick.addActionListener(e -> quickTerminal());
     Ui.Btn sbx = new Ui.Btn(Ui.SvgIcon.cube());
-    sbx.setToolTipText("Sandbox sbx");
-    sbx.addActionListener(e -> toast("Les sandbox sbx ne sont pas encore dans la version Java : elles sont dans la version Electron."));
+    sbx.setToolTipText("Sandbox sbx : nouvelle ou existante, préparer le poste, configurer");
+    sbx.addActionListener(e -> sbxMenu(sbx));
     Ui.Btn folder = new Ui.Btn(Ui.SvgIcon.folderPlus());
     folder.setToolTipText("Nouveau dossier (Ctrl+Maj+D)");
     folder.addActionListener(e -> createFolder());
@@ -354,7 +354,7 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     }
     t.hideExit();
     String cwd = firstDir(s.cwd, store.settings.defaultCwd, System.getProperty("user.home"));
-    String cmd = Shells.startupCommand(s, shell);
+    String cmd = "sandbox".equals(s.kind) && s.sbx != null ? Sbx.startup(Sbx.config(store.settings), s) : Shells.startupCommand(s, shell);
     Pty pty;
     try {
       pty = Pty.start(Shells.commandLine(shell, cmd), cwd, s.name, (buf, off, len) -> onOutput(t, buf, off, len));
@@ -371,6 +371,21 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     if ("claude".equals(s.kind) && !s.claudeStarted) {
       s.claudeStarted = true;
       save();
+    }
+    if (s.sbx != null && !s.sbx.created) {
+      s.sbx.created = true;
+      save();
+    }
+    // Commande tapée pour l'utilisateur (sans Entrée quand il doit d'abord attendre quelque chose).
+    if (s.prefill != null) {
+      Store.Prefill pf = s.prefill;
+      s.prefill = null;
+      save();
+      Timer typer = new Timer(1500, e -> {
+        if (t.pty == pty) type(s, pf.text + (pf.enter ? "\r" : ""));
+      });
+      typer.setRepeats(false);
+      typer.start();
     }
     Thread watcher = new Thread(() -> {
       int code = 0;
@@ -499,8 +514,44 @@ final class Younesh extends JFrame implements Sidebar.Actions {
 
   void restart(Store.Session s) {
     Term t = ensureTerm(s);
+    boolean fresh = !t.running && !t.exited;
     activate(s);
-    start(t);
+    if (!fresh) start(t);
+  }
+
+  // Affiche la discussion et la relance si elle ne tourne plus.
+  void wake(Store.Session s) {
+    Term t = ensureTerm(s);
+    activate(s);
+    if (!t.running) start(t);
+  }
+
+  boolean running(Store.Session s) {
+    Term t = terms.get(s.id);
+    return t != null && t.running;
+  }
+
+  void type(Store.Session s, String text) {
+    Term t = terms.get(s.id);
+    if (t == null || t.pty == null) return;
+    try {
+      t.pty.write(text);
+    } catch (IOException ignored) {
+    }
+  }
+
+  void stop(Store.Session s) {
+    Term t = terms.get(s.id);
+    if (t != null && t.pty != null) t.pty.close();
+  }
+
+  // Range h juste après s, dans le même dossier.
+  void placeAfter(Store.Session h, Store.Session s) {
+    h.folderId = s.folderId;
+    store.sessions.remove(h);
+    store.sessions.add(store.sessions.indexOf(s) + 1, h);
+    sidebar.rebuild();
+    save();
   }
 
   void updateTopbar() {
@@ -546,7 +597,7 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     }
     if (s.name == null || s.name.isBlank()) {
       Shells.Shell sh = Shells.find(s.shell);
-      String label = "claude".equals(s.kind) ? "Claude" : sh != null ? sh.name() : "Terminal";
+      String label = "claude".equals(s.kind) ? "Claude" : "sandbox".equals(s.kind) ? "Sandbox" : sh != null ? sh.name() : "Terminal";
       s.name = label + " · " + basename(s.cwd);
     }
     if ("claude".equals(s.kind) && s.claudeId == null) s.claudeId = UUID.randomUUID().toString();
@@ -678,6 +729,7 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     copy.command = s.command;
     copy.claudeArgs = s.claudeArgs;
     copy.color = s.color;
+    if (s.sbx != null) copy.sbx = new Store.SbxRef(s.sbx.projet, s.sbx.created);
     createSession(copy);
     store.sessions.remove(copy);
     store.sessions.add(store.sessions.indexOf(s) + 1, copy);
@@ -711,6 +763,12 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     JPopupMenu m = Ui.popup();
     if (s != null) {
       Term t = terms.get(s.id);
+      if (s.sbx != null) {
+        Ui.item(m, "⧉ Rouvrir Claude dans la sandbox", () -> restart(s));
+        Ui.item(m, "⧉ Installer dans la sandbox…", () -> Sbx.install(this, s));
+        Ui.item(m, "⧉ Supprimer la sandbox…", null, () -> Sbx.remove(this, s), true);
+        Ui.separator(m);
+      }
       Ui.item(m, "Renommer", () -> sidebar.startRename(null, s));
       Ui.item(m, "Dupliquer", () -> duplicate(s));
       Ui.item(m, t != null && t.running ? "Redémarrer" : "Démarrer", () -> restart(s));
@@ -747,6 +805,8 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     } else {
       Ui.item(m, "+ Nouvelle discussion ici", () -> openNew("shell", f.id));
       Ui.item(m, "✳ Nouvelle discussion Claude ici", () -> openNew("claude", f.id));
+      Ui.item(m, "⧉ Nouvelle sandbox ici", () -> Sbx.newSandbox(this, f.id));
+      Ui.item(m, "⧉ Ouvrir une sandbox existante ici", () -> Sbx.existing(this, f.id));
       Ui.separator(m);
       Ui.item(m, "▶ Tout lancer", () -> launch(f));
       Ui.item(m, "■ Tout arrêter", () -> stopFolder(f));
@@ -761,6 +821,17 @@ final class Younesh extends JFrame implements Sidebar.Actions {
       Ui.item(m, "Supprimer le dossier", null, () -> deleteFolder(f), true);
     }
     m.show(sidebar, p.x, p.y);
+  }
+
+  // Le bouton ⧉ (sbxButtonMenu d'app.js).
+  private void sbxMenu(JComponent anchor) {
+    JPopupMenu m = Ui.popup();
+    Ui.item(m, "⧉ Nouvelle sandbox…", () -> Sbx.newSandbox(this, null));
+    Ui.item(m, "⧉ Ouvrir une sandbox existante…", () -> Sbx.existing(this, null));
+    Ui.separator(m);
+    Ui.item(m, "Préparer le poste…", () -> Sbx.setup(this));
+    Ui.item(m, "Configurer sbx…", () -> Sbx.configure(this));
+    m.show(anchor, 0, anchor.getHeight() + 4);
   }
 
   private void deleteFolder(Store.Folder f) {
@@ -830,8 +901,15 @@ final class Younesh extends JFrame implements Sidebar.Actions {
 
   // Message en bas de la fenêtre, quelques secondes (#toast).
   void toast(String text) {
-    toast.setText("<html><div style='padding:2px 4px'>" + text.replace("&", "&amp;").replace("<", "&lt;") + "</div></html>");
+    toast(text, 3500);
+  }
+
+  void toast(String text, int ms) {
+    String html = text.replace("&", "&amp;").replace("<", "&lt;");
+    toast.setText("<html><div style='padding:2px 4px'>" + html + "</div></html>");
     toast.setFont(Ui.font(13, false));
+    // Un long message passe sur plusieurs lignes plutôt que de dépasser de la fenêtre.
+    if (toast.getPreferredSize().width > 640) toast.setText("<html><div style='padding:2px 4px;width:560px'>" + html + "</div></html>");
     toast.setForeground(theme.text);
     toast.setBorder(BorderFactory.createCompoundBorder(
       BorderFactory.createCompoundBorder(BorderFactory.createMatteBorder(1, 3, 1, 1, theme.accent), BorderFactory.createLineBorder(theme.borderStrong, 0)),
@@ -843,7 +921,7 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     toast.setBounds((getLayeredPane().getWidth() - w) / 2, getLayeredPane().getHeight() - d.height - 22, w, d.height);
     toast.setVisible(true);
     if (toastTimer != null) toastTimer.stop();
-    toastTimer = new Timer(3500, e -> toast.setVisible(false));
+    toastTimer = new Timer(ms, e -> toast.setVisible(false));
     toastTimer.setRepeats(false);
     toastTimer.start();
   }
@@ -886,6 +964,10 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     m.put("Nouvelle discussion", () -> openNew("shell", null));
     m.put("Nouvelle discussion Claude", () -> openNew("claude", null));
     m.put("Terminal rapide dans le dossier personnel", this::quickTerminal);
+    m.put("Nouvelle sandbox", () -> Sbx.newSandbox(this, null));
+    m.put("Ouvrir une sandbox existante", () -> Sbx.existing(this, null));
+    m.put("Préparer le poste pour sbx", () -> Sbx.setup(this));
+    m.put("Configurer sbx", () -> Sbx.configure(this));
     m.put("Nouveau dossier", this::createFolder);
     m.put("Réglages", () -> Dialogs.settings(this));
     m.put("Aller à la discussion qui attend", this::jumpToAttention);

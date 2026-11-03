@@ -40,14 +40,14 @@ final class Dialogs {
   private Dialogs() {
   }
 
-  private record Choice(String id, String label) {
+  record Choice(String id, String label) {
     @Override
     public String toString() {
       return label;
     }
   }
 
-  private static Ui.Btn browse(Younesh app, JTextField target) {
+  static Ui.Btn browse(Younesh app, JTextField target) {
     Ui.Btn b = new Ui.Btn("Parcourir…", Ui.Kind.NORMAL);
     b.addActionListener(e -> {
       JFileChooser fc = new JFileChooser(target.getText().isBlank() ? System.getProperty("user.home") : target.getText());
@@ -55,6 +55,22 @@ final class Dialogs {
       if (fc.showOpenDialog(app) == JFileChooser.APPROVE_OPTION) target.setText(fc.getSelectedFile().getAbsolutePath());
     });
     return b;
+  }
+
+  // Liste « Ranger dans » : Sans dossier puis les dossiers.
+  static JComboBox<Choice> folderChoice(Younesh app, String folderId) {
+    JComboBox<Choice> folder = new JComboBox<>();
+    folder.addItem(new Choice(null, "Sans dossier"));
+    for (Store.Folder f : app.store.folders) {
+      Choice c = new Choice(f.id, f.name);
+      folder.addItem(c);
+      if (f.id.equals(folderId)) folder.setSelectedItem(c);
+    }
+    return folder;
+  }
+
+  static String folderOf(JComboBox<Choice> folder) {
+    return ((Choice) folder.getSelectedItem()).id();
   }
 
   // Nouvelle discussion ou modification. Renvoie false si on annule. Un nom vide = automatique.
@@ -66,17 +82,12 @@ final class Dialogs {
     JComboBox<Shells.Shell> shell = new JComboBox<>(Shells.detect().toArray(Shells.Shell[]::new));
     Shells.Shell current = Shells.find(s.shell != null ? s.shell : app.store.settings.defaultShell);
     if (current != null) shell.setSelectedItem(current);
-    JComboBox<Choice> folder = new JComboBox<>();
-    folder.addItem(new Choice(null, "Sans dossier"));
-    for (Store.Folder f : app.store.folders) {
-      Choice c = new Choice(f.id, f.name);
-      folder.addItem(c);
-      if (f.id.equals(s.folderId)) folder.setSelectedItem(c);
-    }
+    JComboBox<Choice> folder = folderChoice(app, s.folderId);
     JTextField command = Ui.input(s.command, "ex. npm run dev");
     JTextField claudeArgs = Ui.input(s.claudeArgs, "ex. --model opus");
 
-    m.field("Type", kind);
+    boolean sandbox = "sandbox".equals(s.kind);
+    if (!sandbox) m.field("Type", kind);
     m.field("Nom", name);
     m.field("Dossier de travail", Ui.Modal.row(cwd, browse(app, cwd)));
     m.field("Shell", shell);
@@ -84,23 +95,24 @@ final class Dialogs {
     JComponent forShell = m.field("Commande au démarrage (facultatif)", command);
     JComponent forClaude = m.field("Options Claude (facultatif)", claudeArgs,
       "La conversation Claude est liée à cette discussion : elle reprend là où tu t'étais arrêté, même après avoir fermé Younesh.");
+    if (sandbox) m.field("Sandbox", Ui.label("<html><div style='width:360px'>Sandbox sbx « " + s.sbx.projet
+      + " ». Clic droit sur la discussion pour la rouvrir, y installer des outils ou la supprimer.</div></html>", 12, null));
     kind.onChange(i -> {
-      forShell.setVisible(i == 0);
-      forClaude.setVisible(i == 1);
-      m.pack();
-      m.setSize(480, m.getHeight());
+      forShell.setVisible(!sandbox && i == 0);
+      forClaude.setVisible(!sandbox && i == 1);
+      m.refit();
     });
     kind.select("claude".equals(s.kind) ? 1 : 0);
     if (!isNew) kind.lock();
 
     if (!m.open(app)) return false;
-    s.kind = kind.selected() == 1 ? "claude" : "shell";
+    if (!sandbox) s.kind = kind.selected() == 1 ? "claude" : "shell";
     String n = name.getText().trim();
     s.name = n.isEmpty() && !isNew ? s.name : n;
     s.cwd = cwd.getText().trim();
     Shells.Shell sh = (Shells.Shell) shell.getSelectedItem();
     s.shell = sh == null ? null : sh.id();
-    s.folderId = ((Choice) folder.getSelectedItem()).id();
+    s.folderId = folderOf(folder);
     s.command = command.getText().trim();
     s.claudeArgs = claudeArgs.getText().trim();
     return true;
@@ -126,6 +138,16 @@ final class Dialogs {
 
     m.field("Shell par défaut", shell);
     m.field("Dossier de travail par défaut", Ui.Modal.row(cwd, browse(app, cwd)));
+    JPanel sbx = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0));
+    sbx.setOpaque(false);
+    Ui.Btn setup = new Ui.Btn("Préparer le poste…", Ui.Kind.NORMAL);
+    setup.addActionListener(e -> Sbx.setup(app));
+    Ui.Btn config = new Ui.Btn("Configurer sbx…", Ui.Kind.NORMAL);
+    config.addActionListener(e -> Sbx.configure(app));
+    sbx.add(setup);
+    sbx.add(javax.swing.Box.createHorizontalStrut(6));
+    sbx.add(config);
+    m.field("Sandbox sbx", sbx);
     m.field("Apparence", theme);
     m.check(notify);
     m.field("Police", font);
@@ -155,7 +177,7 @@ final class Dialogs {
       Store.Folder f = app.store.folder(s.folderId);
       String b = app.branchOf(s);
       String detail = String.join(" · ", java.util.stream.Stream.of(f == null ? null : f.name, b, Sidebar.shortPath(s.cwd)).filter(x -> x != null && !x.isEmpty()).toList());
-      all.add(new Item("claude".equals(s.kind) ? "✳" : "›_", s.name, detail, () -> app.activate(s)));
+      all.add(new Item(Sidebar.kindIcon(s), s.name, detail, () -> app.activate(s)));
     }
     for (Map.Entry<String, Runnable> c : app.commands().entrySet()) all.add(new Item("›", c.getKey(), "", c.getValue()));
 
