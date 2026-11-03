@@ -24,6 +24,7 @@ Si l'affichage d'un terminal est bizarre, lance Younesh avec la variable `YOUNES
 - **Sessions Claude Code** : le bouton ✳ Claude lance `claude` dans le répertoire choisi ; la conversation reprend au prochain lancement.
 - **Claude attend** : la discussion passe en orange quand Claude se tait après avoir répondu (et sur la cloche du terminal). La notification Windows s'active dans les Réglages.
 - `/rename` dans Claude Code renomme la discussion.
+- **Liens** : les adresses web dans le terminal sont en bleu souligné ; un clic les ouvre dans le navigateur.
 - **Branche git** sous le nom de chaque discussion, lue directement dans `.git`. Le chemin est dans la barre du haut.
 - **Palette rapide** (Ctrl+Shift+P), recherche dans la barre latérale (sans accents).
 - **Thèmes** Sombre, Minuit, Graphite, Clair ; police, taille, historique, shell et répertoire par défaut.

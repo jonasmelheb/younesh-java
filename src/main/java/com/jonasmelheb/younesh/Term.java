@@ -1,10 +1,17 @@
 package com.jonasmelheb.younesh;
 
 import com.jediterm.core.Color;
+import com.jediterm.terminal.HyperlinkStyle;
 import com.jediterm.terminal.TerminalColor;
+import com.jediterm.terminal.TerminalDisplay;
 import com.jediterm.terminal.TextStyle;
 import com.jediterm.terminal.emulator.ColorPalette;
+import com.jediterm.terminal.model.JediTerminal;
 import com.jediterm.terminal.model.StyleState;
+import com.jediterm.terminal.model.TerminalTextBuffer;
+import com.jediterm.terminal.model.hyperlinks.LinkInfo;
+import com.jediterm.terminal.model.hyperlinks.LinkResult;
+import com.jediterm.terminal.model.hyperlinks.LinkResultItem;
 import com.jediterm.terminal.ui.JediTermWidget;
 import com.jediterm.terminal.ui.TerminalActionPresentation;
 import com.jediterm.terminal.ui.settings.DefaultSettingsProvider;
@@ -15,15 +22,19 @@ import javax.swing.JPanel;
 import javax.swing.KeyStroke;
 import javax.swing.text.StyleContext;
 import java.awt.BorderLayout;
+import java.awt.Desktop;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
+import java.net.URI;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 // Un terminal ouvert : le widget JediTerm, son processus et son état dans la barre latérale.
@@ -52,8 +63,16 @@ final class Term {
       protected StyleState createDefaultStyle() {
         return new ThemeStyle();
       }
+
+      @Override
+      protected JediTerminal createTerminal(TerminalDisplay display, TerminalTextBuffer buffer, StyleState style) {
+        return new LinkTerminal(display, buffer, style);
+      }
     };
     widget.getTerminal().addApplicationTitleListener(t -> inClaude = CLAUDE_TITLE.matcher(t.trim()).matches());
+    widget.addHyperlinkFilter(Term::links);
+    // Liens OSC 8 (texte cliquable qui cache l'adresse) : JediTerm ne les reconnaît qu'avec ce filtre.
+    if (widget.getTerminal() instanceof JediTerminal jt) jt.setUrlHyperlinkFilter(Term::links);
     this.view = new JPanel(new BorderLayout());
     view.setBorder(BorderFactory.createEmptyBorder(8, 12, 4, 4));
     view.add(widget, BorderLayout.CENTER);
@@ -84,6 +103,30 @@ final class Term {
     exitBar.add(pill);
   }
 
+  // Les adresses web (et les liens OSC 8 que Claude envoie) deviennent des liens : un clic les ouvre.
+  private static final Pattern URL = Pattern.compile("(?:https?|file)://[^\\s<>\"'`«»]+");
+
+  static LinkResult links(String line) {
+    List<LinkResultItem> items = new ArrayList<>();
+    Matcher m = URL.matcher(line);
+    while (m.find()) {
+      String url = m.group();
+      // La ponctuation qui suit une adresse dans une phrase n'en fait pas partie.
+      while (!url.isEmpty() && ".,;:!?)]}".indexOf(url.charAt(url.length() - 1)) >= 0
+        && !(url.endsWith(")") && url.contains("("))) url = url.substring(0, url.length() - 1);
+      String target = url;
+      items.add(new LinkResultItem(m.start(), m.start() + url.length(), new LinkInfo(() -> open(target))));
+    }
+    return items.isEmpty() ? null : new LinkResult(items);
+  }
+
+  private static void open(String url) {
+    try {
+      Desktop.getDesktop().browse(new URI(url));
+    } catch (Exception ignored) {
+    }
+  }
+
   void onRestart(Runnable r) {
     onRestart = r;
   }
@@ -108,6 +151,40 @@ final class Term {
     widget.setBackground(t.termBg);
     view.setBackground(t.termBg);
     widget.getTerminalPanel().repaint();
+  }
+
+  // Les liens OSC 8 (texte cliquable qui cache l'adresse) : JediTerm ne les souligne qu'au survol et garde leur
+  // couleur après le lien. Ici, bleu souligné comme les autres liens, puis retour au style d'avant.
+  private static final class LinkTerminal extends JediTerminal {
+    private final StyleState style;
+    private TextStyle beforeLink;
+
+    LinkTerminal(TerminalDisplay display, TerminalTextBuffer buffer, StyleState style) {
+      super(display, buffer, style);
+      this.style = style;
+    }
+
+    @Override
+    public void setLinkUriStarted(String uri) {
+      TextStyle before = style.getCurrent();
+      super.setLinkUriStarted(uri);
+      if (style.getCurrent() instanceof HyperlinkStyle link) {
+        beforeLink = before;
+        Theme t = Ui.t();
+        style.setCurrent(new HyperlinkStyle(TerminalColor.rgb(t.link.getRed(), t.link.getGreen(), t.link.getBlue()),
+          before.getBackground(), link.getLinkInfo(), HyperlinkStyle.HighlightMode.ALWAYS));
+      }
+    }
+
+    @Override
+    public void setLinkUriFinished() {
+      if (beforeLink != null && style.getCurrent() instanceof HyperlinkStyle) {
+        style.setCurrent(beforeLink);
+        beforeLink = null;
+      } else {
+        super.setLinkUriFinished();
+      }
+    }
   }
 
   // « Remettre les attributs par défaut » (ESC 8 sans position sauvegardée, RIS…) : JediTerm reprend son style
@@ -190,7 +267,13 @@ final class Term {
 
     @Override
     public TextStyle getHyperlinkColor() {
-      return new TextStyle(tc(theme.get().accent), null);
+      return new TextStyle(tc(theme.get().link), null);
+    }
+
+    // Toujours soulignés, pas seulement au survol.
+    @Override
+    public HyperlinkStyle.HighlightMode getHyperlinkHighlightingMode() {
+      return HyperlinkStyle.HighlightMode.ALWAYS;
     }
 
     // Police avec le repli de Windows : les symboles de Claude (✻ ⎿ ●) s'affichent même absents de la police.

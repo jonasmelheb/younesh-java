@@ -11,6 +11,7 @@ public final class Theme {
   public final Color bg, panel, panel2, border, borderStrong, borderHover, hover, hover2, active;
   public final Color text, muted, muted2, accent, accentSoft, onAccent, scroll;
   public final Color termBg, termFg, selection;
+  public final Color link;   // liens dans le terminal : bleu, comme un lien
   public final Color[] ansi;
 
   public static final Color DANGER = c("#ff6b6b"), OK = c("#4ade80"), ORANGE = c("#ff9f43"), CLAUDE = c("#e8a87c"), SANDBOX = c("#2dd4bf");
@@ -24,6 +25,7 @@ public final class Theme {
     hover = c(ui[6]); hover2 = c(ui[7]); active = c(ui[8]); text = c(ui[9]); muted = c(ui[10]); muted2 = c(ui[11]);
     accent = c(ui[12]); accentSoft = c(ui[13]); onAccent = c(ui[14]); scroll = c(ui[15]);
     termBg = c(term[0]); termFg = c(term[1]); selection = c(term[2]);
+    link = c(dark ? "#58a6ff" : "#0969da");
     this.ansi = new Color[16];
     for (int i = 0; i < 16; i++) this.ansi[i] = c(ansi[i]);
   }
