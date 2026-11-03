@@ -15,12 +15,12 @@ import java.util.UUID;
 // Tout ce qui est sauvegardé : dossiers, discussions, réglages et taille de la fenêtre.
 public final class Store {
   public static final class Folder {
-    public String id = uid(), name, color = "#7c9cff";
+    public String id = uid(), name, color;
     public boolean collapsed;
   }
 
   public static final class Session {
-    public String id = uid(), name, folderId, cwd, shell, color, command;
+    public String id = uid(), name, folderId, cwd, shell, color, command, claudeArgs;
     public String kind = "shell";   // shell ou claude
     public String claudeId;          // conversation Claude reprise au redémarrage
     public boolean claudeStarted;
@@ -30,7 +30,7 @@ public final class Store {
   public static final class Settings {
     public String theme = "sombre", fontFamily = "", defaultShell = "", defaultCwd = "";
     public int fontSize = 14, scrollback = 5000, sidebarWidth = 260;
-    public boolean notify = true;
+    public boolean notify;   // notification Windows quand Claude attend : désactivée par défaut
   }
 
   public List<Folder> folders = new ArrayList<>();

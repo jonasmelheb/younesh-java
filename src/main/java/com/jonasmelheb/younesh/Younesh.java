@@ -6,21 +6,16 @@ import javax.imageio.ImageIO;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
-import javax.swing.Icon;
-import javax.swing.JButton;
-import javax.swing.JColorChooser;
 import javax.swing.JComponent;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
-import javax.swing.JMenu;
-import javax.swing.JMenuItem;
+import javax.swing.JLayeredPane;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
 import javax.swing.JTextField;
-import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import javax.swing.event.DocumentEvent;
@@ -29,20 +24,19 @@ import java.awt.AWTException;
 import java.awt.BorderLayout;
 import java.awt.CardLayout;
 import java.awt.Color;
-import java.awt.Component;
-import java.awt.Cursor;
 import java.awt.Dimension;
-import java.awt.Font;
-import java.awt.GradientPaint;
+import java.awt.FlowLayout;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
+import java.awt.GridLayout;
 import java.awt.Image;
 import java.awt.KeyboardFocusManager;
 import java.awt.Point;
-import java.awt.RenderingHints;
 import java.awt.SystemTray;
 import java.awt.Taskbar;
+import java.awt.Toolkit;
 import java.awt.TrayIcon;
+import java.awt.datatransfer.StringSelection;
 import java.awt.event.KeyEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
@@ -50,11 +44,15 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
-// La fenêtre : barre latérale à gauche, terminal de la discussion active à droite.
+// La fenêtre : barre latérale à gauche, terminal de la discussion active à droite (comme index.html).
 final class Younesh extends JFrame implements Sidebar.Actions {
   final Store store = Store.load();
   private final Map<String, Term> terms = new HashMap<>();
@@ -64,28 +62,32 @@ final class Younesh extends JFrame implements Sidebar.Actions {
   private final CardLayout cards = new CardLayout();
   private final JPanel terminals = new JPanel(cards);
   private final JPanel sidebarPanel = new JPanel(new BorderLayout());
+  private final JPanel main = new JPanel(new BorderLayout());
   private final JSplitPane split;
   private final Sidebar sidebar;
   private final JScrollPane sidebarScroll;
-  private final JTextField search = new JTextField();
-  private final JPanel topbar = new JPanel(new BorderLayout());
-  private final JLabel title = new JLabel(), subtitle = new JLabel();
-  private final JButton restart = new JButton("Relancer");
+  private final JTextField search = Ui.input("", "Rechercher…");
+  private final JPanel topbar = new JPanel();
+  private final JComponent activeDot;
+  private final JLabel title = Ui.label("", 13, null), path = Ui.label("", 12, null);
   private final JPanel empty = new JPanel(new BorderLayout());
-  private final JLabel emptyLabel = new JLabel("<html><center>Aucune discussion ouverte<br><br>Ctrl+Shift+T : nouvelle discussion<br>Ctrl+Shift+N : nouvelle session Claude</center></html>", SwingConstants.CENTER);
+  private final JLabel toast = new JLabel();
+  private Timer toastTimer;
   private TrayIcon tray;
   private Image icon;
 
   Younesh() {
     super("Younesh");
+    Ui.theme = theme;
     try {
       icon = ImageIO.read(Younesh.class.getResource("/icon.png"));
       setIconImage(icon);
     } catch (IOException | RuntimeException ignored) {
     }
     setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
+    setGlassPane(new Ui.Backdrop());
 
-    sidebar = new Sidebar(store, terms, branches, theme, this);
+    sidebar = new Sidebar(store, terms, branches, this);
     sidebarScroll = new JScrollPane(sidebar);
     sidebarScroll.setBorder(null);
     sidebarScroll.getVerticalScrollBar().setUnitIncrement(16);
@@ -93,11 +95,21 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     sidebarPanel.add(header(), BorderLayout.NORTH);
     sidebarPanel.add(sidebarScroll, BorderLayout.CENTER);
     sidebarPanel.add(footer(), BorderLayout.SOUTH);
+    sidebarPanel.setMinimumSize(new Dimension(200, 0));
 
-    JPanel main = new JPanel(new BorderLayout());
+    activeDot = new JComponent() {
+      @Override
+      protected void paintComponent(Graphics g0) {
+        Graphics2D g = Ui.smooth(g0);
+        Ui.dot(g, getWidth() / 2, getHeight() / 2, terms.get(store.activeId), false);
+        g.dispose();
+      }
+    };
+    activeDot.setPreferredSize(new Dimension(13, 13));
+    activeDot.setMaximumSize(new Dimension(13, 13));
     main.add(topbar(), BorderLayout.NORTH);
     main.add(terminals, BorderLayout.CENTER);
-    empty.add(emptyLabel, BorderLayout.CENTER);
+    empty.add(emptyMessage(), BorderLayout.CENTER);
     terminals.add(empty, "empty");
 
     split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, sidebarPanel, main);
@@ -107,13 +119,16 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     split.setDividerLocation(store.settings.sidebarWidth);
     add(split);
 
+    toast.setVisible(false);
+    toast.setOpaque(false);
+    getLayeredPane().add(toast, JLayeredPane.POPUP_LAYER);
+
     if (store.bounds != null && store.bounds.length == 4) {
       setBounds(store.bounds[0], store.bounds[1], store.bounds[2], store.bounds[3]);
     } else {
       setSize(1200, 760);
       setLocationRelativeTo(null);
     }
-    if (Shells.WIN) getRootPane().putClientProperty(FlatClientProperties.TITLE_BAR_SHOW_ICON, true);
     if (!Shells.WIN) {
       getRootPane().putClientProperty("apple.awt.transparentTitleBar", true);
       getRootPane().putClientProperty("apple.awt.fullWindowContent", true);
@@ -151,76 +166,118 @@ final class Younesh extends JFrame implements Sidebar.Actions {
   private JComponent header() {
     JPanel p = new JPanel();
     p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
-    p.setBorder(BorderFactory.createEmptyBorder(Shells.WIN ? 10 : 34, 10, 6, 10));
     p.setOpaque(false);
 
-    JPanel buttons = new JPanel(new java.awt.GridLayout(1, 2, 6, 0));
-    buttons.setOpaque(false);
-    JButton add = new JButton("+ Discussion");
-    add.addActionListener(e -> newSession("shell", null));
-    JButton claude = new JButton("✳ Claude");
-    claude.addActionListener(e -> newSession("claude", null));
-    add.setToolTipText("Nouvelle discussion (Ctrl+Shift+T)");
-    claude.setToolTipText("Nouvelle session Claude Code (Ctrl+Shift+N)");
-    buttons.add(add);
-    buttons.add(claude);
-    buttons.setAlignmentX(LEFT_ALIGNMENT);
-    buttons.setMaximumSize(new Dimension(Integer.MAX_VALUE, 32));
+    JPanel brandRow = new JPanel(new BorderLayout());
+    brandRow.setOpaque(false);
+    brandRow.setBorder(BorderFactory.createEmptyBorder(0, Shells.WIN ? 14 : 84, 0, 14));
+    JLabel brand = Ui.label("Younesh", 13, null);
+    brand.setFont(Ui.font(13, true));
+    brandRow.add(brand, BorderLayout.CENTER);
+    fix(brandRow, 38);
+
+    JPanel actions = new JPanel(new GridLayout(1, 2, 6, 0));
+    actions.setOpaque(false);
+    actions.setBorder(BorderFactory.createEmptyBorder(4, 10, 8, 10));
+    Ui.Btn add = new Ui.Btn("+ Discussion", Ui.Kind.PRIMARY);
+    add.setToolTipText("Nouvelle discussion (Ctrl+Maj+T)");
+    add.addActionListener(e -> openNew("shell", null));
+    Ui.Btn claude = new Ui.Btn("✳ Claude", Ui.Kind.NORMAL);
+    claude.setToolTipText("Nouvelle discussion Claude Code (Ctrl+Maj+N)");
+    claude.addActionListener(e -> openNew("claude", null));
+    actions.add(add);
+    actions.add(claude);
+    fix(actions, 30 + 12);
 
     JPanel row = new JPanel(new BorderLayout(6, 0));
     row.setOpaque(false);
-    search.putClientProperty(FlatClientProperties.PLACEHOLDER_TEXT, "Rechercher…");
-    search.putClientProperty(FlatClientProperties.TEXT_FIELD_SHOW_CLEAR_BUTTON, true);
+    row.setBorder(BorderFactory.createEmptyBorder(0, 10, 8, 10));
     search.getDocument().addDocumentListener(new DocumentListener() {
       public void insertUpdate(DocumentEvent e) { sidebar.setFilter(search.getText()); }
       public void removeUpdate(DocumentEvent e) { sidebar.setFilter(search.getText()); }
       public void changedUpdate(DocumentEvent e) { sidebar.setFilter(search.getText()); }
     });
-    JButton folder = new JButton(new FolderPlusIcon());
-    folder.setToolTipText("Nouveau dossier (Ctrl+Shift+D)");
-    folder.putClientProperty(FlatClientProperties.BUTTON_TYPE, FlatClientProperties.BUTTON_TYPE_TOOLBAR_BUTTON);
-    folder.addActionListener(e -> newFolder());
+    JPanel icons = new JPanel(new GridLayout(1, 3, 6, 0));
+    icons.setOpaque(false);
+    Ui.Btn quick = new Ui.Btn("›_", Ui.Kind.ICON);
+    quick.setFont(Ui.font(13, true));
+    quick.setToolTipText("Terminal rapide dans ton dossier personnel (Ctrl+Maj+Q)");
+    quick.addActionListener(e -> quickTerminal());
+    Ui.Btn sbx = new Ui.Btn(Ui.SvgIcon.cube());
+    sbx.setToolTipText("Sandbox sbx");
+    sbx.addActionListener(e -> toast("Les sandbox sbx ne sont pas encore dans la version Java : elles sont dans la version Electron."));
+    Ui.Btn folder = new Ui.Btn(Ui.SvgIcon.folderPlus());
+    folder.setToolTipText("Nouveau dossier (Ctrl+Maj+D)");
+    folder.addActionListener(e -> createFolder());
+    icons.add(quick);
+    icons.add(sbx);
+    icons.add(folder);
     row.add(search, BorderLayout.CENTER);
-    row.add(folder, BorderLayout.EAST);
-    row.setAlignmentX(LEFT_ALIGNMENT);
-    row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 32));
+    row.add(icons, BorderLayout.EAST);
+    fix(row, 30 + 8);
 
-    p.add(buttons);
-    p.add(Box.createVerticalStrut(8));
+    p.add(brandRow);
+    p.add(actions);
     p.add(row);
     return p;
   }
 
+  private static void fix(JComponent c, int h) {
+    c.setAlignmentX(LEFT_ALIGNMENT);
+    c.setPreferredSize(new Dimension(10, h));
+    c.setMaximumSize(new Dimension(Integer.MAX_VALUE, h));
+  }
+
   private JComponent footer() {
-    JPanel p = new JPanel(new BorderLayout());
+    JPanel p = new JPanel(new BorderLayout(4, 0)) {
+      @Override
+      protected void paintComponent(Graphics g) {
+        g.setColor(theme.border);
+        g.fillRect(0, 0, getWidth(), 1);
+      }
+    };
     p.setOpaque(false);
-    p.setBorder(BorderFactory.createEmptyBorder(6, 8, 8, 12));
-    JButton settings = new JButton("⚙  Réglages");
-    settings.putClientProperty(FlatClientProperties.BUTTON_TYPE, FlatClientProperties.BUTTON_TYPE_TOOLBAR_BUTTON);
+    p.setBorder(BorderFactory.createEmptyBorder(6, 6, 6, 6));
+    Ui.Btn settings = new Ui.Btn("⚙ Réglages", Ui.Kind.GHOST);
     settings.addActionListener(e -> Dialogs.settings(this));
-    p.add(settings, BorderLayout.WEST);
-    p.add(new Signature(), BorderLayout.EAST);
+    p.add(settings, BorderLayout.CENTER);
+    p.add(new Ui.Signature(), BorderLayout.EAST);
     return p;
   }
 
   private JComponent topbar() {
-    topbar.setBorder(BorderFactory.createEmptyBorder(Shells.WIN ? 8 : 10, 14, 8, 10));
-    JPanel texts = new JPanel();
-    texts.setLayout(new BoxLayout(texts, BoxLayout.X_AXIS));
-    texts.setOpaque(false);
-    title.setFont(title.getFont().deriveFont(Font.BOLD, 13f));
-    subtitle.setFont(subtitle.getFont().deriveFont(12f));
-    texts.add(title);
-    texts.add(Box.createHorizontalStrut(12));
-    texts.add(subtitle);
-    restart.putClientProperty(FlatClientProperties.BUTTON_TYPE, FlatClientProperties.BUTTON_TYPE_TOOLBAR_BUTTON);
-    restart.addActionListener(e -> {
-      Store.Session s = store.session(store.activeId);
-      if (s != null) restart(s);
-    });
-    topbar.add(texts, BorderLayout.CENTER);
-    topbar.add(restart, BorderLayout.EAST);
+    topbar.setLayout(new BoxLayout(topbar, BoxLayout.X_AXIS));
+    topbar.setPreferredSize(new Dimension(10, 38));
+    title.setFont(Ui.font(13, true));
+    topbar.add(activeDot);
+    topbar.add(Box.createHorizontalStrut(8));
+    topbar.add(title);
+    topbar.add(Box.createHorizontalStrut(8));
+    topbar.add(path);
+    topbar.add(Box.createHorizontalGlue());
     return topbar;
+  }
+
+  private JComponent emptyMessage() {
+    JPanel p = new JPanel();
+    p.setOpaque(false);
+    p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
+    JLabel h1 = new JLabel("Aucune discussion ouverte") {
+      @Override
+      public Color getForeground() {
+        return theme.text;
+      }
+    };
+    h1.setFont(Ui.font(18, true));
+    JLabel hint = Ui.label("Nouvelle discussion : Ctrl+Maj+T · Claude : Ctrl+Maj+N · Dossier : Ctrl+Maj+D", 13, null);
+    h1.setAlignmentX(CENTER_ALIGNMENT);
+    hint.setAlignmentX(CENTER_ALIGNMENT);
+    p.add(Box.createVerticalGlue());
+    p.add(h1);
+    p.add(Box.createVerticalStrut(8));
+    p.add(hint);
+    p.add(Box.createVerticalGlue());
+    return p;
   }
 
   // ---------- Thème ----------
@@ -231,45 +288,46 @@ final class Younesh extends JFrame implements Sidebar.Actions {
 
   void applyTheme() {
     theme = Theme.of(store.settings.theme);
+    Ui.theme = theme;
     Main.setupLaf(theme);
     SwingUtilities.updateComponentTreeUI(this);
-    sidebar.setTheme(theme);
     sidebarScroll.setBorder(null);
     split.setBorder(null);
     sidebarPanel.setBackground(theme.panel);
     sidebarScroll.getViewport().setBackground(theme.panel);
+    main.setBackground(theme.bg);
     topbar.setBackground(theme.bg);
+    topbar.setOpaque(true);
     topbar.setBorder(BorderFactory.createCompoundBorder(
-      BorderFactory.createMatteBorder(0, 0, 1, 0, theme.border), topbar.getBorder() instanceof javax.swing.border.CompoundBorder cb ? cb.getInsideBorder() : topbar.getBorder()));
-    title.setForeground(theme.text);
-    subtitle.setForeground(theme.muted);
+      BorderFactory.createMatteBorder(0, 0, 1, 0, theme.border), BorderFactory.createEmptyBorder(0, 14, 0, 14)));
     terminals.setBackground(theme.termBg);
     empty.setBackground(theme.bg);
-    emptyLabel.setForeground(theme.muted);
     split.setBackground(theme.border);
     getRootPane().putClientProperty(FlatClientProperties.TITLE_BAR_BACKGROUND, theme.panel);
     getRootPane().putClientProperty(FlatClientProperties.TITLE_BAR_FOREGROUND, theme.muted);
-    for (Term t : terms.values()) {
-      t.widget.setBackground(theme.termBg);
-      t.view.setBackground(theme.termBg);
-      t.widget.getTerminalPanel().repaint();
-    }
+    for (Term t : terms.values()) t.applyTheme(theme);
+    sidebar.rebuild();
     repaint();
   }
 
   // ---------- Discussions ----------
 
+  private Term ensureTerm(Store.Session s) {
+    return terms.computeIfAbsent(s.id, id -> {
+      Term t = new Term(s, () -> theme, () -> store.settings);
+      t.applyTheme(theme);
+      t.widget.getTerminal().addApplicationTitleListener(title -> SwingUtilities.invokeLater(() -> applyClaudeTitle(s, title)));
+      t.onRestart(() -> start(t));
+      t.onClose(() -> close(s, true));
+      terminals.add(t.view, s.id);
+      return t;
+    });
+  }
+
   @Override
   public void activate(Store.Session s) {
     store.activeId = s.id;
-    Term t = terms.computeIfAbsent(s.id, id -> {
-      Term nt = new Term(s, () -> theme, () -> store.settings);
-      nt.widget.setBackground(theme.termBg);
-      nt.view.setBackground(theme.termBg);
-      nt.widget.getTerminal().addApplicationTitleListener(title -> SwingUtilities.invokeLater(() -> applyClaudeTitle(s, title)));
-      terminals.add(nt.view, s.id);
-      return nt;
-    });
+    Term t = ensureTerm(s);
     if (!t.running && !t.exited) start(t);
     t.unread = false;
     t.attention = false;
@@ -287,16 +345,24 @@ final class Younesh extends JFrame implements Sidebar.Actions {
       error("Aucun shell trouvé sur ce PC.");
       return;
     }
+    if (t.pty != null) {
+      Pty old = t.pty;
+      t.pty = null;
+      old.close();
+    }
+    t.hideExit();
     String cwd = firstDir(s.cwd, store.settings.defaultCwd, System.getProperty("user.home"));
     String cmd = Shells.startupCommand(s, shell);
+    Pty pty;
     try {
-      t.pty = Pty.start(Shells.commandLine(shell, cmd), cwd, s.name, (buf, off, len) -> onOutput(t, buf, off, len));
+      pty = Pty.start(Shells.commandLine(shell, cmd), cwd, s.name, (buf, off, len) -> onOutput(t, buf, off, len));
     } catch (IOException | RuntimeException e) {
       error("Impossible de lancer " + shell.name() + " :\n" + e.getMessage());
       t.exited = true;
       return;
     }
-    t.widget.setTtyConnector(t.pty);
+    t.pty = pty;
+    t.widget.setTtyConnector(pty);
     t.widget.start();
     t.running = true;
     t.exited = false;
@@ -304,23 +370,27 @@ final class Younesh extends JFrame implements Sidebar.Actions {
       s.claudeStarted = true;
       save();
     }
-    Pty pty = t.pty;
     Thread watcher = new Thread(() -> {
+      int code = 0;
       try {
-        pty.process().waitFor();
+        code = pty.process().waitFor();
       } catch (InterruptedException ignored) {
       }
+      int exit = code;
       SwingUtilities.invokeLater(() -> {
         if (t.pty != pty) return;
         t.running = false;
         t.exited = true;
         t.attention = false;
+        t.showExit(exit);
         sidebar.repaint();
-        updateTopbar();
+        activeDot.repaint();
       });
     }, "younesh-exit-" + s.name);
     watcher.setDaemon(true);
     watcher.start();
+    sidebar.repaint();
+    activeDot.repaint();
   }
 
   private static String firstDir(String... dirs) {
@@ -359,14 +429,14 @@ final class Younesh extends JFrame implements Sidebar.Actions {
   private void raise(Term t) {
     if (t.attention) return;
     t.attention = true;
-    sidebar.repaint();
+    sidebar.rebuild();
     try {
       if (Taskbar.isTaskbarSupported() && Taskbar.getTaskbar().isSupported(Taskbar.Feature.USER_ATTENTION_WINDOW)) {
         Taskbar.getTaskbar().requestWindowUserAttention(this);
       }
     } catch (RuntimeException ignored) {
     }
-    if (store.settings.notify && !isActive()) notifyUser(t.session.name, "claude".equals(t.session.kind) ? "Claude attend ta réponse" : "Le terminal demande ton attention");
+    if (store.settings.notify) notifyUser(t.session.name, "claude".equals(t.session.kind) ? "Claude attend ta réponse" : "Nouvelle activité");
   }
 
   private void notifyUser(String title, String text) {
@@ -391,13 +461,13 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     boolean changed = false;
     for (Store.Session s : store.sessions) {
       String b = Shells.gitBranch(s.cwd);
-      if (!java.util.Objects.equals(branches.get(s.id), b)) {
+      if (!Objects.equals(branches.get(s.id), b)) {
         if (b == null) branches.remove(s.id); else branches.put(s.id, b);
         changed = true;
       }
     }
     if (changed) {
-      sidebar.repaint();
+      sidebar.rebuild();
       updateTopbar();
     }
   }
@@ -405,10 +475,10 @@ final class Younesh extends JFrame implements Sidebar.Actions {
   // Claude Code écrit le nom de la session dans le titre du terminal : « ✳ Nom », le symbole tourne
   // pendant qu'il travaille. On reprend ce nom (après /rename par exemple). Les titres des shells
   // (chemins, noms de programmes) commencent par une lettre et sont ignorés.
-  private static final java.util.regex.Pattern CLAUDE_TITLE = java.util.regex.Pattern.compile("^[^\\p{L}\\p{N}\\s]\\s+(.+)$");
+  private static final Pattern CLAUDE_TITLE = Pattern.compile("^[^\\p{L}\\p{N}\\s]\\s+(.+)$");
 
   static String claudeTitle(String title) {
-    java.util.regex.Matcher m = CLAUDE_TITLE.matcher(title.trim());
+    Matcher m = CLAUDE_TITLE.matcher(title.trim());
     if (!m.find()) return null;
     String name = m.group(1).trim();
     return name.isEmpty() || name.equals("Claude Code") ? null : name;
@@ -426,34 +496,25 @@ final class Younesh extends JFrame implements Sidebar.Actions {
   }
 
   void restart(Store.Session s) {
-    Term old = terms.remove(s.id);
-    if (old != null) {
-      old.pty = null;
-      try {
-        old.widget.close();
-      } catch (RuntimeException ignored) {
-      }
-      terminals.remove(old.view);
-    }
+    Term t = ensureTerm(s);
     activate(s);
+    start(t);
   }
 
-  private void updateTopbar() {
+  void updateTopbar() {
     Store.Session s = store.session(store.activeId);
+    activeDot.setVisible(s != null);
     if (s == null) {
       title.setText("");
-      subtitle.setText("");
-      restart.setVisible(false);
+      path.setText("");
+      setTitle("Younesh");
       return;
     }
-    Term t = terms.get(s.id);
     title.setText(s.name);
     String b = branches.get(s.id);
-    String home = System.getProperty("user.home");
-    String cwd = s.cwd == null || s.cwd.isBlank() ? "~" : s.cwd.startsWith(home) ? "~" + s.cwd.substring(home.length()) : s.cwd;
-    String branch = b != null ? "  ·  " + b : "";
-    subtitle.setText(cwd + branch);
-    restart.setVisible(t != null && t.exited);
+    path.setText(Sidebar.shortPath(s.cwd) + (b != null ? "  ⎇ " + b : ""));
+    setTitle(s.name + " — Younesh");
+    activeDot.repaint();
   }
 
   private void showEmpty() {
@@ -463,33 +524,71 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     sidebar.rebuild();
   }
 
-  void newSession(String kind, String folderId) {
+  void openNew(String kind, String folderId) {
     Store.Session s = new Store.Session();
     s.kind = kind;
-    s.folderId = folderId != null ? folderId : currentFolderId();
-    s.name = "claude".equals(kind) ? "Claude" : "Terminal";
+    s.name = "";
+    s.shell = store.settings.defaultShell;
     s.cwd = store.settings.defaultCwd;
-    if (!Dialogs.editSession(this, s, true)) return;
-    if ("claude".equals(kind)) s.claudeId = UUID.randomUUID().toString();
+    Store.Session active = store.session(store.activeId);
+    s.folderId = folderId != null ? folderId : active != null ? active.folderId : null;
+    if (Dialogs.editSession(this, s, true)) createSession(s);
+  }
+
+  // Le nom automatique : « Windows PowerShell · projet », « Claude · projet ».
+  void createSession(Store.Session s) {
+    if (s.cwd == null || s.cwd.isBlank()) s.cwd = firstDir(store.settings.defaultCwd, System.getProperty("user.home"));
+    if (s.shell == null || s.shell.isBlank()) {
+      Shells.Shell def = Shells.find(store.settings.defaultShell);
+      s.shell = def == null ? null : def.id();
+    }
+    if (s.name == null || s.name.isBlank()) {
+      Shells.Shell sh = Shells.find(s.shell);
+      String label = "claude".equals(s.kind) ? "Claude" : sh != null ? sh.name() : "Terminal";
+      s.name = label + " · " + basename(s.cwd);
+    }
+    if ("claude".equals(s.kind) && s.claudeId == null) s.claudeId = UUID.randomUUID().toString();
     store.sessions.add(s);
+    Store.Folder f = store.folder(s.folderId);
+    if (f != null) f.collapsed = false;
     refreshBranches();
     activate(s);
   }
 
-  private String currentFolderId() {
-    Store.Session a = store.session(store.activeId);
-    return a != null ? a.folderId : null;
+  // Ctrl+Maj+T / N : sans fenêtre, dans le dossier et le répertoire de la discussion active.
+  void quickNew(String kind) {
+    Store.Session active = store.session(store.activeId);
+    Store.Session s = new Store.Session();
+    s.kind = kind;
+    if (active != null) {
+      s.folderId = active.folderId;
+      s.cwd = active.cwd;
+    }
+    createSession(s);
   }
 
-  void newFolder() {
-    String name = Dialogs.input(this, "Nouveau dossier", "Nom du dossier", "");
-    if (name == null || name.isBlank()) return;
+  // Le bouton ›_ : un terminal tout de suite, shell par défaut, dans le dossier personnel.
+  void quickTerminal() {
+    Store.Session s = new Store.Session();
+    s.cwd = System.getProperty("user.home");
+    createSession(s);
+  }
+
+  static String basename(String p) {
+    if (p == null || p.isBlank()) return "";
+    String[] parts = p.split("[\\\\/]");
+    for (int i = parts.length - 1; i >= 0; i--) if (!parts[i].isEmpty()) return parts[i];
+    return p;
+  }
+
+  void createFolder() {
     Store.Folder f = new Store.Folder();
-    f.name = name.trim();
-    f.color = Theme.SWATCHES[store.folders.size() % Theme.SWATCHES.length];
+    f.name = "Nouveau dossier";
+    f.color = Theme.SWATCHES[(store.folders.size() * 3) % Theme.SWATCHES.length];
     store.folders.add(f);
     sidebar.rebuild();
     save();
+    sidebar.startRename(f, null);
   }
 
   @Override
@@ -500,35 +599,101 @@ final class Younesh extends JFrame implements Sidebar.Actions {
   }
 
   @Override
-  public void rename(Store.Folder f, Store.Session s) {
-    String current = s != null ? s.name : f.name;
-    String name = Dialogs.input(this, "Renommer", s != null ? "Nom de la discussion" : "Nom du dossier", current);
-    if (name == null || name.isBlank()) return;
-    if (s != null) s.name = name.trim(); else f.name = name.trim();
-    sidebar.rebuild();
+  public void renamed() {
     updateTopbar();
     save();
   }
 
   @Override
+  public void newIn(Store.Folder f) {
+    openNew("shell", f.id);
+  }
+
+  // ▶ d'un dossier : démarre toutes ses discussions sans changer de discussion active.
+  @Override
+  public void launch(Store.Folder f) {
+    List<Store.Session> items = store.sessions.stream()
+      .filter(s -> f.id.equals(s.folderId) && (terms.get(s.id) == null || !terms.get(s.id).running)).toList();
+    for (Store.Session s : items) start(ensureTerm(s));
+    int n = items.size();
+    toast(n > 0 ? n + " discussion" + (n > 1 ? "s lancées" : " lancée") + " dans « " + f.name + " »." : "Tout tourne déjà dans « " + f.name + " ».");
+    sidebar.repaint();
+  }
+
+  private void stopFolder(Store.Folder f) {
+    List<Term> running = store.sessions.stream().filter(s -> f.id.equals(s.folderId))
+      .map(s -> terms.get(s.id)).filter(t -> t != null && t.running).toList();
+    if (running.isEmpty()) return;
+    if (!confirm("Arrêter les " + running.size() + " discussion(s) en cours dans « " + f.name + " » ?")) return;
+    for (Term t : running) if (t.pty != null) t.pty.close();
+  }
+
+  @Override
   public void close(Store.Session s) {
-    Term t = terms.remove(s.id);
+    close(s, false);
+  }
+
+  void close(Store.Session s, boolean force) {
+    Term t = terms.get(s.id);
+    if (!force && t != null && t.running && !confirm("Fermer « " + s.name + " » ? Le processus en cours sera arrêté.")) return;
+    terms.remove(s.id);
     if (t != null) {
+      Pty pty = t.pty;
       t.pty = null;
-      try {
-        t.widget.close();
-      } catch (RuntimeException ignored) {
-      }
+      if (pty != null) pty.close();
       terminals.remove(t.view);
     }
-    int i = store.sessions.indexOf(s);
+    List<Store.Session> order = visibleOrder();
+    int i = order.indexOf(s);
     store.sessions.remove(s);
     if (s.id.equals(store.activeId)) {
-      if (store.sessions.isEmpty()) showEmpty();
-      else activate(store.sessions.get(Math.max(0, Math.min(i, store.sessions.size() - 1))));
+      order.remove(s);
+      if (order.isEmpty()) showEmpty();
+      else activate(order.get(Math.max(0, Math.min(i, order.size() - 1))));
     }
     sidebar.rebuild();
     save();
+  }
+
+  // Ordre d'affichage dans la barre latérale : les dossiers puis « Sans dossier ».
+  private List<Store.Session> visibleOrder() {
+    List<Store.Session> out = new java.util.ArrayList<>();
+    for (Store.Folder f : store.folders) {
+      if (f.collapsed) continue;
+      for (Store.Session s : store.sessions) if (f.id.equals(s.folderId)) out.add(s);
+    }
+    for (Store.Session s : store.sessions) if (store.folder(s.folderId) == null) out.add(s);
+    return out;
+  }
+
+  private void duplicate(Store.Session s) {
+    Store.Session copy = new Store.Session();
+    copy.name = s.name + " (copie)";
+    copy.kind = s.kind;
+    copy.folderId = s.folderId;
+    copy.cwd = s.cwd;
+    copy.shell = s.shell;
+    copy.command = s.command;
+    copy.claudeArgs = s.claudeArgs;
+    copy.color = s.color;
+    createSession(copy);
+    store.sessions.remove(copy);
+    store.sessions.add(store.sessions.indexOf(s) + 1, copy);
+    sidebar.rebuild();
+    save();
+  }
+
+  private void edit(Store.Session s) {
+    String shell = s.shell, cwd = s.cwd, command = s.command, args = s.claudeArgs;
+    if (!Dialogs.editSession(this, s, false)) return;
+    boolean relaunch = !Objects.equals(shell, s.shell) || !Objects.equals(cwd, s.cwd)
+      || !Objects.equals(command, s.command) || !Objects.equals(args, s.claudeArgs);
+    refreshBranches();
+    sidebar.rebuild();
+    updateTopbar();
+    save();
+    Term t = terms.get(s.id);
+    if (relaunch && t != null && t.running && confirm("Relancer la discussion avec ces réglages ?")) start(t);
   }
 
   @Override
@@ -537,89 +702,71 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     save();
   }
 
+  // ---------- Menus contextuels (folderMenu et sessionMenu d'app.js) ----------
+
   @Override
   public void menu(Store.Folder f, Store.Session s, Point p) {
-    JPopupMenu m = new JPopupMenu();
+    JPopupMenu m = Ui.popup();
     if (s != null) {
-      m.add(item("Renommer", () -> rename(null, s)));
-      m.add(item("Modifier…", () -> {
-        if (Dialogs.editSession(this, s, false)) {
-          refreshBranches();
-          sidebar.rebuild();
-          updateTopbar();
-          save();
-        }
-      }));
-      m.add(colorMenu(s.color, c -> s.color = c, true));
-      JMenu move = new JMenu("Déplacer vers");
+      Term t = terms.get(s.id);
+      Ui.item(m, "Renommer", () -> sidebar.startRename(null, s));
+      Ui.item(m, "Dupliquer", () -> duplicate(s));
+      Ui.item(m, t != null && t.running ? "Redémarrer" : "Démarrer", () -> restart(s));
+      Ui.item(m, "Modifier…", () -> edit(s));
+      Ui.item(m, "Copier le chemin", () -> Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(s.cwd == null ? "" : s.cwd), null));
+      Ui.separator(m);
+      Ui.menuLabel(m, "Ranger dans");
       for (Store.Folder target : store.folders) {
-        JMenuItem it = item(target.name, () -> {
+        if (target.id.equals(s.folderId)) continue;
+        Ui.item(m, target.name, new Ui.Square(Sidebar.colorOf(target.color, theme.muted2), false), () -> {
           s.folderId = target.id;
           moved();
-        });
-        it.setIcon(new Swatch(Sidebar.colorOf(target.color, theme.accent)));
-        it.setEnabled(!target.id.equals(s.folderId));
-        move.add(it);
+        }, false);
       }
-      move.addSeparator();
-      JMenuItem out = item("Hors dossier", () -> {
+      if (s.folderId != null) Ui.item(m, "Sans dossier", new Ui.Square(theme.muted2, true), () -> {
         s.folderId = null;
         moved();
-      });
-      out.setEnabled(s.folderId != null);
-      move.add(out);
-      m.add(move);
-      m.add(item("Relancer", () -> restart(s)));
-      m.addSeparator();
-      m.add(item("Fermer", () -> close(s)));
-    } else {
-      m.add(item("Nouvelle discussion ici", () -> newSession("shell", f.id)));
-      m.add(item("Nouvelle session Claude ici", () -> newSession("claude", f.id)));
-      m.addSeparator();
-      m.add(item("Renommer", () -> rename(f, null)));
-      m.add(colorMenu(f.color, c -> f.color = c, false));
-      m.add(item(f.collapsed ? "Déplier" : "Replier", () -> toggle(f)));
-      m.addSeparator();
-      m.add(item("Supprimer le dossier", () -> {
-        long n = store.sessions.stream().filter(x -> f.id.equals(x.folderId)).count();
-        if (n > 0 && JOptionPane.showConfirmDialog(this, "Les " + n + " discussions du dossier sortent du dossier. Continuer ?", "Supprimer le dossier", JOptionPane.OK_CANCEL_OPTION) != JOptionPane.OK_OPTION) return;
-        store.sessions.stream().filter(x -> f.id.equals(x.folderId)).forEach(x -> x.folderId = null);
-        store.folders.remove(f);
+      }, false);
+      Ui.item(m, "+ Nouveau dossier…", () -> {
+        Store.Folder nf = new Store.Folder();
+        nf.name = "Nouveau dossier";
+        nf.color = Theme.SWATCHES[(store.folders.size() * 3) % Theme.SWATCHES.length];
+        store.folders.add(nf);
+        s.folderId = nf.id;
         moved();
-      }));
+        sidebar.startRename(nf, null);
+      });
+      Ui.swatches(m, s.color, c -> {
+        s.color = c;
+        moved();
+      }, true);
+      Ui.separator(m);
+      Ui.item(m, "Fermer la discussion", null, () -> close(s), true);
+    } else {
+      Ui.item(m, "+ Nouvelle discussion ici", () -> openNew("shell", f.id));
+      Ui.item(m, "✳ Nouvelle discussion Claude ici", () -> openNew("claude", f.id));
+      Ui.separator(m);
+      Ui.item(m, "▶ Tout lancer", () -> launch(f));
+      Ui.item(m, "■ Tout arrêter", () -> stopFolder(f));
+      Ui.separator(m);
+      Ui.item(m, "Renommer", () -> sidebar.startRename(f, null));
+      Ui.item(m, f.collapsed ? "Déplier" : "Replier", () -> toggle(f));
+      Ui.swatches(m, f.color, c -> {
+        f.color = c;
+        moved();
+      }, true);
+      Ui.separator(m);
+      Ui.item(m, "Supprimer le dossier", null, () -> deleteFolder(f), true);
     }
     m.show(sidebar, p.x, p.y);
   }
 
-  private JMenu colorMenu(String current, java.util.function.Consumer<String> set, boolean allowNone) {
-    JMenu menu = new JMenu("Couleur");
-    for (String hex : Theme.SWATCHES) {
-      JMenuItem it = item(hex.equalsIgnoreCase(current) ? "✓" : " ", () -> {
-        set.accept(hex);
-        moved();
-      });
-      it.setIcon(new Swatch(Theme.c(hex)));
-      menu.add(it);
-    }
-    menu.addSeparator();
-    menu.add(item("Personnalisée…", () -> {
-      Color c = JColorChooser.showDialog(this, "Couleur", Sidebar.colorOf(current, theme.accent));
-      if (c != null) {
-        set.accept(Theme.hex(c));
-        moved();
-      }
-    }));
-    if (allowNone) menu.add(item("Aucune", () -> {
-      set.accept(null);
-      moved();
-    }));
-    return menu;
-  }
-
-  private static JMenuItem item(String label, Runnable r) {
-    JMenuItem it = new JMenuItem(label);
-    it.addActionListener(e -> r.run());
-    return it;
+  private void deleteFolder(Store.Folder f) {
+    long n = store.sessions.stream().filter(x -> f.id.equals(x.folderId)).count();
+    if (n > 0 && !confirm("Supprimer le dossier « " + f.name + " » ? Ses " + n + " discussion(s) passeront dans « Sans dossier ».")) return;
+    store.sessions.stream().filter(x -> f.id.equals(x.folderId)).forEach(x -> x.folderId = null);
+    store.folders.remove(f);
+    moved();
   }
 
   // ---------- Raccourcis ----------
@@ -640,15 +787,16 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     int k = e.getKeyCode();
     Runnable action = null;
     if (ctrl && k == KeyEvent.VK_TAB) action = () -> cycle(shift ? -1 : 1);
-    else if (k == KeyEvent.VK_F2) action = () -> {
+    else if (k == KeyEvent.VK_F2 && !(e.getComponent() instanceof JTextField)) action = () -> {
       Store.Session s = store.session(store.activeId);
-      if (s != null) rename(null, s);
+      if (s != null) sidebar.startRename(null, s);
     };
     else if (ctrl && shift) {
       switch (k) {
-        case KeyEvent.VK_T -> action = () -> newSession("shell", null);
-        case KeyEvent.VK_N -> action = () -> newSession("claude", null);
-        case KeyEvent.VK_D -> action = this::newFolder;
+        case KeyEvent.VK_T -> action = () -> quickNew("shell");
+        case KeyEvent.VK_N -> action = () -> quickNew("claude");
+        case KeyEvent.VK_Q -> action = this::quickTerminal;
+        case KeyEvent.VK_D -> action = this::createFolder;
         case KeyEvent.VK_W -> action = () -> {
           Store.Session s = store.session(store.activeId);
           if (s != null) close(s);
@@ -670,13 +818,37 @@ final class Younesh extends JFrame implements Sidebar.Actions {
   }
 
   private void cycle(int dir) {
-    List<Store.Session> list = store.sessions;
+    List<Store.Session> list = visibleOrder();
     if (list.isEmpty()) return;
     int i = list.indexOf(store.session(store.activeId));
     activate(list.get(Math.floorMod(i + dir, list.size())));
   }
 
   // ---------- Divers ----------
+
+  // Message en bas de la fenêtre, quelques secondes (#toast).
+  void toast(String text) {
+    toast.setText("<html><div style='padding:2px 4px'>" + text.replace("&", "&amp;").replace("<", "&lt;") + "</div></html>");
+    toast.setFont(Ui.font(13, false));
+    toast.setForeground(theme.text);
+    toast.setBorder(BorderFactory.createCompoundBorder(
+      BorderFactory.createCompoundBorder(BorderFactory.createMatteBorder(1, 3, 1, 1, theme.accent), BorderFactory.createLineBorder(theme.borderStrong, 0)),
+      BorderFactory.createEmptyBorder(8, 12, 8, 12)));
+    toast.setOpaque(true);
+    toast.setBackground(theme.panel2);
+    Dimension d = toast.getPreferredSize();
+    int w = Math.min(d.width, getLayeredPane().getWidth() - 32);
+    toast.setBounds((getLayeredPane().getWidth() - w) / 2, getLayeredPane().getHeight() - d.height - 22, w, d.height);
+    toast.setVisible(true);
+    if (toastTimer != null) toastTimer.stop();
+    toastTimer = new Timer(3500, e -> toast.setVisible(false));
+    toastTimer.setRepeats(false);
+    toastTimer.start();
+  }
+
+  boolean confirm(String msg) {
+    return JOptionPane.showConfirmDialog(this, msg, "Younesh", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) == JOptionPane.OK_OPTION;
+  }
 
   void save() {
     if (sidebarPanel.isVisible() && split.getDividerLocation() > 80) store.settings.sidebarWidth = split.getDividerLocation();
@@ -702,84 +874,19 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     return store.sessions;
   }
 
+  String branchOf(Store.Session s) {
+    return branches.get(s.id);
+  }
+
   // Les actions de la palette rapide.
   Map<String, Runnable> commands() {
-    Map<String, Runnable> m = new java.util.LinkedHashMap<>();
-    m.put("Nouvelle discussion", () -> newSession("shell", null));
-    m.put("Nouvelle session Claude", () -> newSession("claude", null));
-    m.put("Nouveau dossier", this::newFolder);
+    Map<String, Runnable> m = new LinkedHashMap<>();
+    m.put("Nouvelle discussion", () -> openNew("shell", null));
+    m.put("Nouvelle discussion Claude", () -> openNew("claude", null));
+    m.put("Terminal rapide dans le dossier personnel", this::quickTerminal);
+    m.put("Nouveau dossier", this::createFolder);
     m.put("Réglages", () -> Dialogs.settings(this));
     m.put("Aller à la discussion qui attend", this::jumpToAttention);
     return m;
-  }
-
-  // Le « Y » en dégradé, comme dans la version Electron.
-  private static final class Signature extends JComponent {
-    Signature() {
-      setPreferredSize(new Dimension(22, 26));
-      setToolTipText("Made by Y");
-      setCursor(Cursor.getDefaultCursor());
-    }
-
-    @Override
-    protected void paintComponent(Graphics g0) {
-      Graphics2D g = (Graphics2D) g0.create();
-      g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-      g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-      g.setFont(getFont().deriveFont(Font.BOLD | Font.ITALIC, 18f));
-      int w = g.getFontMetrics().stringWidth("Y");
-      int x = (getWidth() - w) / 2, y = getHeight() / 2 + g.getFontMetrics().getAscent() / 2 - 3;
-      g.setPaint(new GradientPaint(x, 0, new Color(0x7c9cff), x + w, getHeight(), new Color(0xf472b6)));
-      g.drawString("Y", x, y);
-      g.dispose();
-    }
-  }
-
-  static final class Swatch implements Icon {
-    private final Color color;
-
-    Swatch(Color color) {
-      this.color = color;
-    }
-
-    public void paintIcon(Component c, Graphics g0, int x, int y) {
-      Graphics2D g = (Graphics2D) g0.create();
-      g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-      g.setColor(color);
-      g.fillRoundRect(x, y + 1, 14, 12, 4, 4);
-      g.dispose();
-    }
-
-    public int getIconWidth() {
-      return 14;
-    }
-
-    public int getIconHeight() {
-      return 14;
-    }
-  }
-
-  private static final class FolderPlusIcon implements Icon {
-    public void paintIcon(Component c, Graphics g0, int x, int y) {
-      Graphics2D g = (Graphics2D) g0.create();
-      g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-      g.setColor(c.getForeground());
-      g.setStroke(new java.awt.BasicStroke(1.4f));
-      g.drawRoundRect(x + 1, y + 4, 15, 11, 4, 4);
-      g.drawLine(x + 2, y + 4, x + 3, y + 2);
-      g.drawLine(x + 3, y + 2, x + 7, y + 2);
-      g.drawLine(x + 7, y + 2, x + 8, y + 4);
-      g.drawLine(x + 8, y + 7, x + 8, y + 12);
-      g.drawLine(x + 5, y + 9, x + 11, y + 9);
-      g.dispose();
-    }
-
-    public int getIconWidth() {
-      return 18;
-    }
-
-    public int getIconHeight() {
-      return 17;
-    }
   }
 }

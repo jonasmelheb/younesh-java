@@ -67,9 +67,10 @@ public final class Shells {
   // Commande lancée à l'ouverture : claude (repris si déjà démarré) ou la commande de démarrage.
   public static String startupCommand(Store.Session s, Shell shell) {
     if ("claude".equals(s.kind)) {
-      String fresh = "claude --session-id " + s.claudeId;
+      String extra = s.claudeArgs == null || s.claudeArgs.isBlank() ? "" : " " + s.claudeArgs.trim();
+      String fresh = "claude --session-id " + s.claudeId + extra;
       if (!s.claudeStarted) return fresh;
-      String resume = "claude --resume " + s.claudeId;
+      String resume = "claude --resume " + s.claudeId + extra;
       return "powershell".equals(shell.family()) ? resume + "; if (-not $?) { " + fresh + " }" : resume + " || " + fresh;
     }
     return s.command == null || s.command.isBlank() ? null : s.command.trim();
