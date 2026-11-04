@@ -227,6 +227,27 @@ final class Ui {
       return new SvgIcon(p);
     }
 
+    // Le serveur du bouton SSH (deux tiroirs et leurs voyants).
+    static SvgIcon server() {
+      Path2D p = new Path2D.Float();
+      p.append(new java.awt.geom.RoundRectangle2D.Float(2, 2.5f, 12, 4.5f, 2.4f, 2.4f), false);
+      p.append(new java.awt.geom.RoundRectangle2D.Float(2, 9, 12, 4.5f, 2.4f, 2.4f), false);
+      p.append(new java.awt.geom.Ellipse2D.Float(4.4f, 4.35f, .8f, .8f), false);
+      p.append(new java.awt.geom.Ellipse2D.Float(4.4f, 10.85f, .8f, .8f), false);
+      return new SvgIcon(p);
+    }
+
+    // Dessine l'icône ailleurs que sur un bouton (barre latérale), à la taille size.
+    void paint(Graphics2D g0, int x, int y, Color c, float size) {
+      Graphics2D g = (Graphics2D) g0.create();
+      g.translate(x, y);
+      g.scale(size / 16, size / 16);
+      g.setColor(c);
+      g.setStroke(new BasicStroke(1.3f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND));
+      g.draw(path);
+      g.dispose();
+    }
+
     static SvgIcon folderPlus() {
       Path2D p = new Path2D.Float();
       p.moveTo(1.5, 3.5); p.lineTo(5.5, 3.5); p.lineTo(7, 5); p.lineTo(14.5, 5); p.lineTo(14.5, 13); p.lineTo(1.5, 13); p.closePath();
@@ -493,13 +514,14 @@ final class Ui {
       refit();
       setLocation(owner.getX() + (owner.getWidth() - width) / 2, owner.getY() + Math.max(40, (owner.getHeight() - getHeight()) / 2));
       Component glass = owner.getGlassPane();
+      boolean veiled = glass.isVisible();   // une fenêtre ouverte par-dessus une autre garde son voile
       glass.setVisible(true);
       SwingUtilities.invokeLater(() -> {
         Component first = firstInput(body);
         if (first != null) first.requestFocusInWindow();
       });
       setVisible(true);
-      glass.setVisible(false);
+      glass.setVisible(veiled);
       return ok;
     }
 

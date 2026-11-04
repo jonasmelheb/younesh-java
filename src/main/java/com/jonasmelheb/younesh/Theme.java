@@ -14,7 +14,7 @@ public final class Theme {
   public final Color link;   // liens dans le terminal : bleu, comme un lien
   public final Color[] ansi;
 
-  public static final Color DANGER = c("#ff6b6b"), OK = c("#4ade80"), ORANGE = c("#ff9f43"), CLAUDE = c("#e8a87c"), SANDBOX = c("#2dd4bf");
+  public static final Color DANGER = c("#ff6b6b"), OK = c("#4ade80"), ORANGE = c("#ff9f43"), CLAUDE = c("#e8a87c"), SANDBOX = c("#2dd4bf"), SSH = c("#38bdf8");
 
   // ui : bg, panel, panel-2, border, border-strong, border-hover, hover, hover-2, active, text, muted, muted-2, accent, accent-soft, on-accent, scroll
   private Theme(String id, String name, boolean dark, String[] ui, String[] term, String[] ansi) {

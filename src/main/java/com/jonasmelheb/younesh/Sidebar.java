@@ -175,11 +175,12 @@ final class Sidebar extends JComponent {
   private boolean matches(Store.Session s) {
     if (filter.isEmpty()) return true;
     Store.Folder f = store.folder(s.folderId);
-    return norm(s.name).contains(filter) || norm(s.cwd).contains(filter) || (f != null && norm(f.name).contains(filter));
+    return norm(s.name).contains(filter) || norm(s.cwd).contains(filter) || (f != null && norm(f.name).contains(filter))
+      || (s.ssh != null && norm(Ssh.label(s.ssh)).contains(filter));
   }
 
   private int heightOf(Store.Session s) {
-    return branches.get(s.id) != null ? TWO_LINES : ONE_LINE;
+    return branches.get(s.id) != null || s.ssh != null ? TWO_LINES : ONE_LINE;
   }
 
   void rebuild() {
@@ -243,6 +244,7 @@ final class Sidebar extends JComponent {
     }
     if (r.session == null) return null;
     Store.Session s = r.session;
+    if (s.ssh != null) return "<html>" + esc(s.name) + "<br>" + esc(Ssh.commandLine(s.ssh)) + "</html>";
     String b = branches.get(s.id);
     return "<html>" + esc(s.name) + "<br>" + esc(s.cwd == null ? "" : s.cwd) + (b != null ? "<br>Branche : " + esc(b) : "") + "</html>";
   }
@@ -542,13 +544,15 @@ final class Sidebar extends JComponent {
     if (s.color != null) kc = colorOf(s.color, t.muted);
     else if ("claude".equals(s.kind)) kc = Theme.CLAUDE;
     else if ("sandbox".equals(s.kind)) kc = Theme.SANDBOX;
+    else if (s.ssh != null) kc = Theme.SSH;
     else if (fc != null) kc = Theme.mix(fc, t.text, 0.8f);
     else kc = t.muted;
     g.setFont(Ui.font(12, false));
     FontMetrics km = g.getFontMetrics();
     int cy = r.y + r.h / 2;
     g.setColor(kc);
-    g.drawString(kind, r.x + 8 + (16 - km.stringWidth(kind)) / 2, cy + km.getAscent() / 2 - 2);
+    if (s.ssh != null) SERVER.paint(g, r.x + 9, cy - 7, kc, 14);
+    else g.drawString(kind, r.x + 8 + (16 - km.stringWidth(kind)) / 2, cy + km.getAscent() / 2 - 2);
 
     // Le nom, et la branche en dessous. Le chemin est dans la barre du haut et l'infobulle.
     int x = r.x + 8 + 16 + 8;
@@ -559,7 +563,19 @@ final class Sidebar extends JComponent {
     int nameY = r.y + 6 + fm.getAscent();
     if (!editing(r)) g.drawString(ellipsize(fm, s.name, right - x), x, nameY);
     String b = branches.get(s.id);
-    if (b != null) {
+    if (s.ssh != null) {
+      // Le serveur, et le nombre de tunnels ouverts par cette connexion.
+      g.setFont(Ui.font(11, false));
+      FontMetrics sm = g.getFontMetrics();
+      long open = Ssh.openCount(store, s.id);
+      String count = open > 0 ? "  ⇄ " + open : "";
+      String server = ellipsize(sm, Ssh.label(s.ssh), right - x - sm.stringWidth(count));
+      int sy = r.y + 6 + 17 + sm.getAscent() - 1;
+      g.setColor(t.muted);
+      g.drawString(server, x, sy);
+      g.setColor(Theme.OK);
+      g.drawString(count, x + sm.stringWidth(server), sy);
+    } else if (b != null) {
       g.setFont(Ui.font(11, false));
       FontMetrics sm = g.getFontMetrics();
       g.setColor(t.accentSoft);
@@ -569,10 +585,13 @@ final class Sidebar extends JComponent {
     Ui.dot(g, r.x + rw - 8 - 4, cy, term, pulse);
   }
 
+  private static final Ui.SvgIcon SERVER = Ui.SvgIcon.server();
+
   static String kindIcon(Store.Session s) {
     return switch (s.kind == null ? "" : s.kind) {
       case "claude" -> "✳";
       case "sandbox" -> "⧉";
+      case "ssh" -> "⇄";
       default -> "›_";
     };
   }

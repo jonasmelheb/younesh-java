@@ -72,6 +72,10 @@ final class Younesh extends JFrame implements Sidebar.Actions {
   private final JLabel title = Ui.label("", 13, null), path = Ui.label("", 12, null);
   private final JPanel empty = new JPanel(new BorderLayout());
   private final JLabel toast = new JLabel();
+  // Les boutons d'icônes à côté de la recherche, et le compteur de tunnels en bas : visibles seulement si SSH est activé.
+  private final JPanel icons = new JPanel(new GridLayout(1, 0, 6, 0));
+  private Ui.Btn quickBtn, sbxBtn, sshBtn, folderBtn;
+  private final Ui.Btn tunnelsBtn = new Ui.Btn("", Ui.Kind.GHOST);
   private Timer toastTimer;
   private TrayIcon tray;
   private Image icon;
@@ -160,6 +164,8 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     refreshBranches();
     Store.Session active = store.session(store.activeId);
     if (active != null) activate(active); else showEmpty();
+    applySshUi();
+    if (store.settings.ssh) Ssh.startAuto(this);
     setVisible(true);
   }
 
@@ -199,21 +205,21 @@ final class Younesh extends JFrame implements Sidebar.Actions {
       public void removeUpdate(DocumentEvent e) { sidebar.setFilter(search.getText()); }
       public void changedUpdate(DocumentEvent e) { sidebar.setFilter(search.getText()); }
     });
-    JPanel icons = new JPanel(new GridLayout(1, 3, 6, 0));
     icons.setOpaque(false);
-    Ui.Btn quick = new Ui.Btn("›_", Ui.Kind.ICON);
-    quick.setFont(Ui.font(13, true));
-    quick.setToolTipText("Terminal rapide dans ton dossier personnel (Ctrl+Maj+Q)");
-    quick.addActionListener(e -> quickTerminal());
-    Ui.Btn sbx = new Ui.Btn(Ui.SvgIcon.cube());
-    sbx.setToolTipText("Sandbox sbx : nouvelle ou existante, préparer le poste, configurer");
-    sbx.addActionListener(e -> sbxMenu(sbx));
-    Ui.Btn folder = new Ui.Btn(Ui.SvgIcon.folderPlus());
-    folder.setToolTipText("Nouveau dossier (Ctrl+Maj+D)");
-    folder.addActionListener(e -> createFolder());
-    icons.add(quick);
-    icons.add(sbx);
-    icons.add(folder);
+    quickBtn = new Ui.Btn("›_", Ui.Kind.ICON);
+    quickBtn.setFont(Ui.font(13, true));
+    quickBtn.setToolTipText("Terminal rapide dans ton dossier personnel (Ctrl+Maj+Q)");
+    quickBtn.addActionListener(e -> quickTerminal());
+    sbxBtn = new Ui.Btn(Ui.SvgIcon.cube());
+    sbxBtn.setToolTipText("Sandbox sbx : nouvelle ou existante, préparer le poste, configurer");
+    sbxBtn.addActionListener(e -> sbxMenu(sbxBtn));
+    sshBtn = new Ui.Btn(Ui.SvgIcon.server());
+    sshBtn.setToolTipText("SSH : nouvelle connexion, importer ~/.ssh/config, tunnels");
+    sshBtn.addActionListener(e -> sshMenu(sshBtn));
+    folderBtn = new Ui.Btn(Ui.SvgIcon.folderPlus());
+    folderBtn.setToolTipText("Nouveau dossier (Ctrl+Maj+D)");
+    folderBtn.addActionListener(e -> createFolder());
+    fillIcons();
     row.add(search, BorderLayout.CENTER);
     row.add(icons, BorderLayout.EAST);
     fix(row, 30 + 8);
@@ -243,8 +249,40 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     Ui.Btn settings = new Ui.Btn("⚙ Réglages", Ui.Kind.GHOST);
     settings.addActionListener(e -> Dialogs.settings(this));
     p.add(settings, BorderLayout.CENTER);
-    p.add(new Ui.Signature(), BorderLayout.EAST);
+    tunnelsBtn.addActionListener(e -> Ssh.tunnels(this, null));
+    JPanel east = new JPanel(new BorderLayout(4, 0));
+    east.setOpaque(false);
+    east.add(tunnelsBtn, BorderLayout.CENTER);
+    east.add(new Ui.Signature(), BorderLayout.EAST);
+    p.add(east, BorderLayout.EAST);
     return p;
+  }
+
+  private void fillIcons() {
+    icons.removeAll();
+    icons.add(quickBtn);
+    icons.add(sbxBtn);
+    if (store.settings.ssh) icons.add(sshBtn);
+    icons.add(folderBtn);
+    icons.revalidate();
+    icons.repaint();
+  }
+
+  // Bouton serveur et compteur « ⇄ n » des tunnels ouverts (orange si l'un d'eux a un problème).
+  void applySshUi() {
+    fillIcons();
+    boolean show = store.settings.ssh && !store.tunnels.isEmpty();
+    tunnelsBtn.setVisible(show);
+    if (!show) return;
+    long open = Ssh.openCount(store, null);
+    boolean trouble = Ssh.trouble(store);
+    Color c = trouble ? Theme.ORANGE : open > 0 ? Theme.OK : theme.muted;
+    tunnelsBtn.setText("<html><span style='color:" + Theme.hex(c) + "'>⇄ " + open + "</span></html>");
+    tunnelsBtn.setToolTipText("Tunnels SSH : " + open + " ouvert(s) sur " + store.tunnels.size() + (trouble ? " · un tunnel a un problème" : ""));
+  }
+
+  void refreshSidebar() {
+    sidebar.rebuild();
   }
 
   private JComponent topbar() {
@@ -344,7 +382,7 @@ final class Younesh extends JFrame implements Sidebar.Actions {
   private void start(Term t) {
     Store.Session s = t.session;
     Shells.Shell shell = Shells.find(s.shell != null ? s.shell : store.settings.defaultShell);
-    if (shell == null) {
+    if (shell == null && s.ssh == null) {
       error("Aucun shell trouvé sur ce PC.");
       return;
     }
@@ -355,12 +393,20 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     }
     t.hideExit();
     String cwd = firstDir(s.cwd, store.settings.defaultCwd, System.getProperty("user.home"));
-    String cmd = "sandbox".equals(s.kind) && s.sbx != null ? Sbx.startup(Sbx.config(store.settings), s) : Shells.startupCommand(s, shell);
+    // Une connexion SSH lance ssh sans shell autour : quand elle se ferme, la barre propose de se reconnecter.
+    List<String> line;
+    if (s.ssh != null) {
+      line = Ssh.command(Pty.freshEnv(), s.ssh, List.of());
+    } else {
+      String cmd = "sandbox".equals(s.kind) && s.sbx != null ? Sbx.startup(Sbx.config(store.settings), s) : Shells.startupCommand(s, shell);
+      line = Shells.commandLine(shell, cmd);
+    }
     Pty pty;
     try {
-      pty = Pty.start(Shells.commandLine(shell, cmd), cwd, s.name, (buf, off, len) -> onOutput(t, buf, off, len));
+      pty = Pty.start(line, cwd, s.name, (buf, off, len) -> onOutput(t, buf, off, len));
     } catch (IOException | RuntimeException e) {
-      error("Impossible de lancer " + shell.name() + " :\n" + e.getMessage());
+      error(s.ssh != null ? "ssh est introuvable sur ce PC. Installe le « Client OpenSSH » : Paramètres › Système › Fonctionnalités facultatives."
+        : "Impossible de lancer " + shell.name() + " :\n" + e.getMessage());
       t.exited = true;
       return;
     }
@@ -478,7 +524,7 @@ final class Younesh extends JFrame implements Sidebar.Actions {
   private void refreshBranches() {
     boolean changed = false;
     for (Store.Session s : store.sessions) {
-      String b = Shells.gitBranch(s.cwd);
+      String b = s.ssh != null ? null : Shells.gitBranch(s.cwd);
       if (!Objects.equals(branches.get(s.id), b)) {
         if (b == null) branches.remove(s.id); else branches.put(s.id, b);
         changed = true;
@@ -566,7 +612,7 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     }
     title.setText(s.name);
     String b = branches.get(s.id);
-    path.setText(Sidebar.shortPath(s.cwd) + (b != null ? "  ⎇ " + b : ""));
+    path.setText(s.ssh != null ? Ssh.label(s.ssh) : Sidebar.shortPath(s.cwd) + (b != null ? "  ⎇ " + b : ""));
     setTitle(s.name + " — Younesh");
     activeDot.repaint();
   }
@@ -599,7 +645,7 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     if (s.name == null || s.name.isBlank()) {
       Shells.Shell sh = Shells.find(s.shell);
       String label = "claude".equals(s.kind) ? "Claude" : "sandbox".equals(s.kind) ? "Sandbox" : sh != null ? sh.name() : "Terminal";
-      s.name = label + " · " + basename(s.cwd);
+      s.name = s.ssh != null ? Ssh.target(s.ssh) : label + " · " + basename(s.cwd);
     }
     if ("claude".equals(s.kind) && s.claudeId == null) s.claudeId = UUID.randomUUID().toString();
     store.sessions.add(s);
@@ -607,6 +653,15 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     if (f != null) f.collapsed = false;
     refreshBranches();
     activate(s);
+  }
+
+  // Ajoutée sans l'ouvrir (import de plusieurs serveurs SSH).
+  void addQuietly(Store.Session s) {
+    store.sessions.add(s);
+    Store.Folder f = store.folder(s.folderId);
+    if (f != null) f.collapsed = false;
+    sidebar.rebuild();
+    save();
   }
 
   // Ctrl+Maj+T / N : sans fenêtre, dans le dossier et le répertoire de la discussion active.
@@ -689,7 +744,11 @@ final class Younesh extends JFrame implements Sidebar.Actions {
 
   void close(Store.Session s, boolean force) {
     Term t = terms.get(s.id);
-    if (!force && t != null && t.running && !confirm("Fermer « " + s.name + " » ? Le processus en cours sera arrêté.")) return;
+    boolean running = !force && t != null && t.running;
+    List<Store.Tunnel> linked = Ssh.of(store, s.id);
+    if ((running || !linked.isEmpty()) && !confirm("Fermer « " + s.name + " » ?" + (running ? " Le processus en cours sera arrêté." : "")
+      + (linked.isEmpty() ? "" : " Ses " + linked.size() + " tunnel(s) seront supprimés."))) return;
+    for (Store.Tunnel tn : linked) Ssh.delete(this, tn);
     terms.remove(s.id);
     if (t != null) {
       Pty pty = t.pty;
@@ -731,6 +790,15 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     copy.claudeArgs = s.claudeArgs;
     copy.color = s.color;
     if (s.sbx != null) copy.sbx = new Store.SbxRef(s.sbx.projet, s.sbx.created);
+    if (s.ssh != null) {
+      copy.ssh = new Store.SshRef();
+      copy.ssh.host = s.ssh.host;
+      copy.ssh.user = s.ssh.user;
+      copy.ssh.port = s.ssh.port;
+      copy.ssh.identity = s.ssh.identity;
+      copy.ssh.jump = s.ssh.jump;
+      copy.ssh.options = s.ssh.options;
+    }
     createSession(copy);
     store.sessions.remove(copy);
     store.sessions.add(store.sessions.indexOf(s) + 1, copy);
@@ -770,11 +838,22 @@ final class Younesh extends JFrame implements Sidebar.Actions {
         Ui.item(m, "⧉ Supprimer la sandbox…", null, () -> Sbx.remove(this, s), true);
         Ui.separator(m);
       }
+      if (s.ssh != null) {
+        if (store.settings.ssh) {
+          int n = Ssh.of(store, s.id).size();
+          Ui.item(m, "⇄ Tunnels de ce serveur" + (n > 0 ? " (" + n + ")" : "") + "…", () -> Ssh.tunnels(this, s.id));
+          Ui.item(m, "⇄ Nouveau tunnel sur ce serveur…", () -> Ssh.form(this, null, s.id));
+        }
+        Ui.item(m, "Copier la commande ssh", () -> copy(Ssh.commandLine(s.ssh)));
+        Ui.separator(m);
+      }
       Ui.item(m, "Renommer", () -> sidebar.startRename(null, s));
       Ui.item(m, "Dupliquer", () -> duplicate(s));
-      Ui.item(m, t != null && t.running ? "Redémarrer" : "Démarrer", () -> restart(s));
-      Ui.item(m, "Modifier…", () -> edit(s));
-      Ui.item(m, "Copier le chemin", () -> Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(s.cwd == null ? "" : s.cwd), null));
+      Ui.item(m, s.ssh != null ? (t != null && t.running ? "Se reconnecter" : "Se connecter") : t != null && t.running ? "Redémarrer" : "Démarrer", () -> restart(s));
+      Ui.item(m, "Modifier…", () -> {
+        if (s.ssh != null) Ssh.edit(this, s, null); else edit(s);
+      });
+      if (s.ssh == null) Ui.item(m, "Copier le chemin", () -> copy(s.cwd == null ? "" : s.cwd));
       Ui.separator(m);
       Ui.menuLabel(m, "Ranger dans");
       for (Store.Folder target : store.folders) {
@@ -808,6 +887,7 @@ final class Younesh extends JFrame implements Sidebar.Actions {
       Ui.item(m, "✳ Nouvelle discussion Claude ici", () -> openNew("claude", f.id));
       Ui.item(m, "⧉ Nouvelle sandbox ici", () -> Sbx.newSandbox(this, f.id));
       Ui.item(m, "⧉ Ouvrir une sandbox existante ici", () -> Sbx.existing(this, f.id));
+      if (store.settings.ssh) Ui.item(m, "Nouvelle connexion SSH ici", Ui.SvgIcon.server(), () -> Ssh.edit(this, null, f.id), false);
       Ui.separator(m);
       Ui.item(m, "▶ Tout lancer", () -> launch(f));
       Ui.item(m, "■ Tout arrêter", () -> stopFolder(f));
@@ -833,6 +913,21 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     Ui.item(m, "Préparer le poste…", () -> Sbx.setup(this));
     Ui.item(m, "Configurer sbx…", () -> Sbx.configure(this));
     m.show(anchor, 0, anchor.getHeight() + 4);
+  }
+
+  // Le bouton serveur (sshButtonMenu d'app.js).
+  private void sshMenu(JComponent anchor) {
+    JPopupMenu m = Ui.popup();
+    Ui.item(m, "Nouvelle connexion SSH…", () -> Ssh.edit(this, null, null));
+    Ui.item(m, "Importer depuis ~/.ssh/config…", () -> Ssh.importConfig(this, null));
+    Ui.separator(m);
+    Ui.item(m, "⇄ Tunnels…", () -> Ssh.tunnels(this, null));
+    Ui.item(m, "⇄ Nouveau tunnel…", () -> Ssh.form(this, null, null));
+    m.show(anchor, 0, anchor.getHeight() + 4);
+  }
+
+  private static void copy(String text) {
+    Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(text), null);
   }
 
   private void deleteFolder(Store.Folder f) {
@@ -939,6 +1034,7 @@ final class Younesh extends JFrame implements Sidebar.Actions {
 
   private void quit() {
     save();
+    Ssh.killAll();
     for (Term t : terms.values()) {
       if (t.pty != null) t.pty.close();
     }
@@ -969,6 +1065,12 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     m.put("Ouvrir une sandbox existante", () -> Sbx.existing(this, null));
     m.put("Préparer le poste pour sbx", () -> Sbx.setup(this));
     m.put("Configurer sbx", () -> Sbx.configure(this));
+    if (store.settings.ssh) {
+      m.put("Nouvelle connexion SSH", () -> Ssh.edit(this, null, null));
+      m.put("Importer les serveurs de ~/.ssh/config", () -> Ssh.importConfig(this, null));
+      m.put("Tunnels SSH", () -> Ssh.tunnels(this, null));
+      m.put("Nouveau tunnel SSH", () -> Ssh.form(this, null, null));
+    }
     m.put("Nouveau dossier", this::createFolder);
     m.put("Réglages", () -> Dialogs.settings(this));
     m.put("Aller à la discussion qui attend", this::jumpToAttention);

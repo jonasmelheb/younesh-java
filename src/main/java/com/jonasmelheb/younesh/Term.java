@@ -44,6 +44,7 @@ final class Term {
   final JPanel view;   // le widget avec sa marge (8 12 4 4 comme .term) et la barre « Processus terminé »
   private final JPanel exitBar = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
   private final JLabel exitText = Ui.label("", 13, null);
+  private final Ui.Btn restart = new Ui.Btn("Relancer", Ui.Kind.PRIMARY);
   private Runnable onRestart = () -> { }, onClose = () -> { };
   Pty pty;
   volatile boolean running, exited;
@@ -93,7 +94,6 @@ final class Term {
     };
     pill.setOpaque(false);
     pill.setBorder(BorderFactory.createEmptyBorder(6, 14, 6, 6));
-    Ui.Btn restart = new Ui.Btn("Relancer", Ui.Kind.PRIMARY);
     restart.addActionListener(e -> onRestart.run());
     Ui.Btn close = new Ui.Btn("Fermer", Ui.Kind.NORMAL);
     close.addActionListener(e -> onClose.run());
@@ -136,7 +136,9 @@ final class Term {
   }
 
   void showExit(int code) {
-    exitText.setText("Processus terminé" + (code != 0 ? " (code " + code + ")" : ""));
+    boolean ssh = "ssh".equals(session.kind);
+    exitText.setText((ssh ? "Connexion fermée" : "Processus terminé") + (code != 0 ? " (code " + code + ")" : ""));
+    restart.setText(ssh ? "Se reconnecter" : "Relancer");
     view.add(exitBar, BorderLayout.SOUTH);
     view.revalidate();
     view.repaint();

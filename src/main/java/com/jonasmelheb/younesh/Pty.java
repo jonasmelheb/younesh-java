@@ -170,10 +170,9 @@ public final class Pty extends ProcessTtyConnector {
 
   // Chemin complet d'un programme d'après le Path donné : Windows cherche sinon dans celui de Younesh, peut-être ancien.
   static String which(Map<String, String> env, String name) {
-    if (!Shells.WIN) return name;
     String path = get(env, "Path");
-    if (path != null) for (String dir : path.split(";")) {
-      java.nio.file.Path exe = java.nio.file.Path.of(dir.trim().replace("\"", ""), name + ".exe");
+    if (path != null) for (String dir : path.split(Shells.WIN ? ";" : ":")) {
+      java.nio.file.Path exe = java.nio.file.Path.of(dir.trim().replace("\"", ""), Shells.WIN ? name + ".exe" : name);
       try {
         if (!dir.isBlank() && java.nio.file.Files.isRegularFile(exe)) return exe.toString();
       } catch (RuntimeException ignored) {

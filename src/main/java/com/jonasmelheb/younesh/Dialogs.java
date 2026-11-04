@@ -135,6 +135,7 @@ final class Dialogs {
     JSpinner size = new JSpinner(new SpinnerNumberModel(st.fontSize, 9, 28, 1));
     JSpinner scrollback = new JSpinner(new SpinnerNumberModel(st.scrollback, 1000, 100000, 1000));
     JCheckBox notify = new JCheckBox("Notification Windows quand Claude attend ta réponse", st.notify);
+    JCheckBox ssh = new JCheckBox("Activer SSH : connexions aux serveurs et tunnels (redirection de ports)", st.ssh);
 
     m.field("Shell par défaut", shell);
     m.field("Dossier de travail par défaut", Ui.Modal.row(cwd, browse(app, cwd)));
@@ -150,6 +151,7 @@ final class Dialogs {
     m.field("Sandbox sbx", sbx);
     m.field("Apparence", theme);
     m.check(notify);
+    m.check(ssh);
     m.field("Police", font);
     m.field("Taille du texte", size);
     m.field("Historique (lignes gardées par terminal)", scrollback,
@@ -164,6 +166,12 @@ final class Dialogs {
     st.fontSize = (Integer) size.getValue();
     st.scrollback = (Integer) scrollback.getValue();
     st.notify = notify.isSelected();
+    // Désactiver SSH ferme les tunnels ; les discussions SSH restent dans la liste.
+    if (st.ssh != ssh.isSelected()) {
+      st.ssh = ssh.isSelected();
+      if (st.ssh) Ssh.startAuto(app); else Ssh.stopAll(app);
+    }
+    app.applySshUi();
     app.applyTheme();
     app.save();
   }

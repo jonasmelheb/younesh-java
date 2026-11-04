@@ -21,13 +21,25 @@ public final class Store {
 
   public static final class Session {
     public String id = uid(), name, folderId, cwd, shell, color, command, claudeArgs;
-    public String kind = "shell";   // shell, claude ou sandbox
+    public String kind = "shell";   // shell, claude, sandbox ou ssh
     public String claudeId;          // conversation Claude reprise au redémarrage
     public boolean claudeStarted;
     public String titleSeen;         // dernier nom lu dans le titre posé par Claude
     public SbxRef sbx;               // sandbox sbx ouverte par cette discussion
     public String helper;            // discussion d'appoint sbx (préparation, installation), réutilisée par son nom
     public Prefill prefill;          // commande à taper au prochain démarrage
+    public SshRef ssh;               // serveur d'une discussion SSH
+  }
+
+  // Une connexion SSH : les champs vides sont laissés à ssh (~/.ssh/config, port 22, clés par défaut).
+  public static final class SshRef {
+    public String host = "", user = "", port = "", identity = "", jump = "", options = "";
+  }
+
+  // Un tunnel SSH : type L (local), R (distant) ou D (proxy SOCKS), par la connexion sessionId.
+  public static final class Tunnel {
+    public String id = uid(), name = "", sessionId, type = "L", port = "", host = "localhost", hostPort = "";
+    public boolean auto;   // ouvert au démarrage de Younesh
   }
 
   public static final class SbxRef {
@@ -54,6 +66,7 @@ public final class Store {
     public String theme = "sombre", fontFamily = "", defaultShell = "", defaultCwd = "";
     public int fontSize = 14, scrollback = 5000, sidebarWidth = 260;
     public boolean notify;   // notification Windows quand Claude attend : désactivée par défaut
+    public boolean ssh;      // connexions SSH et tunnels : désactivés par défaut
     public Sbx.Config sbx;   // configuration sbx importée ou modifiée (null : celle par défaut)
     public List<String> sbxLastInstalls = new ArrayList<>();
     public java.util.Map<String, Boolean> sbxDone = new java.util.HashMap<>();
@@ -61,6 +74,7 @@ public final class Store {
 
   public List<Folder> folders = new ArrayList<>();
   public List<Session> sessions = new ArrayList<>();
+  public List<Tunnel> tunnels = new ArrayList<>();
   public Settings settings = new Settings();
   public String activeId;
   public int[] bounds;
@@ -88,6 +102,7 @@ public final class Store {
         if (s.settings == null) s.settings = new Settings();
         if (s.folders == null) s.folders = new ArrayList<>();
         if (s.sessions == null) s.sessions = new ArrayList<>();
+        if (s.tunnels == null) s.tunnels = new ArrayList<>();
         if (s.settings.sbxLastInstalls == null) s.settings.sbxLastInstalls = new ArrayList<>();
         if (s.settings.sbxDone == null) s.settings.sbxDone = new java.util.HashMap<>();
         return s;
