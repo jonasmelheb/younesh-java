@@ -165,11 +165,24 @@ final class Sbx {
   // fichier pour garder le clavier (sudo, questions éventuelles).
   private static final String INSTALL_DONE = "==> Installation terminée.";
 
+  // La commande s'exécute déjà dans la sandbox, où sbx n'existe pas. Celle copiée depuis une doc arrive souvent
+  // emballée (« sbx exec -it nom bash -lc '…' ») : seul l'intérieur est gardé, aussi pour celles déjà enregistrées.
+  private static final java.util.regex.Pattern SBX_IN_SHELL = java.util.regex.Pattern.compile("^\\s*sbx\\s+exec\\s+(?:-\\S+\\s+)*\\S+\\s+(?:bash|sh)\\s+-l?c\\s+(['\"])(.*)\\1\\s*$");
+
+  static String innerScript(String script) {
+    List<String> out = new ArrayList<>();
+    for (String line : script.split("\n", -1)) {
+      java.util.regex.Matcher m = SBX_IN_SHELL.matcher(line);
+      out.add(m.matches() ? m.group(2) : line.replaceFirst("^\\s*sbx\\s+exec\\s+(?:-\\S+\\s+)*\\S+\\s+", ""));
+    }
+    return String.join("\n", out);
+  }
+
   static String installCommand(Config cfg, String projet, List<Install> items) {
     List<String> lines = new ArrayList<>(List.of("set -e"));
     for (Install it : items) {
       lines.add("echo; echo \"==> " + it.label.replace("\"", "") + "\"");
-      lines.add(it.script);
+      lines.add(innerScript(it.script));
     }
     lines.add("echo; echo \"" + INSTALL_DONE + " Relance Claude : clic droit sur la sandbox, Rouvrir Claude.\"");
     String b64 = Base64.getEncoder().encodeToString(String.join("\n", lines).getBytes(StandardCharsets.UTF_8));
