@@ -6,7 +6,7 @@
 
   <groupId>com.jonasmelheb</groupId>
   <artifactId>younesh-java</artifactId>
-  <version>0.4.0</version>
+  <version>0.5.0</version>
   <name>Younesh (Java)</name>
 
   <properties>
@@ -89,6 +89,9 @@
               <transformers>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                   <mainClass>com.jonasmelheb.younesh.Main</mainClass>
+                  <manifestEntries>
+                    <Implementation-Version>${project.version}</Implementation-Version>
+                  </manifestEntries>
                 </transformer>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
               </transformers>

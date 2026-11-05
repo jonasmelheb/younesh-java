@@ -15,6 +15,8 @@ Vérifier la version de Java : `java -version` (17 ou plus).
 
 Si l'affichage d'un terminal est bizarre, lance Younesh avec la variable `YOUNESH_PTY_LOG=1` : ce que reçoit chaque terminal est copié dans `%APPDATA%\younesh-java\pty-<nom>.log`.
 
+Younesh se met ensuite à jour tout seul : il télécharge la nouvelle version et remplace son `.jar` à la fermeture (case à décocher dans les Réglages). S'il n'y arrive pas, il signale la nouvelle version.
+
 ## Ce qu'il y a dedans
 
 - **Discussions dans la barre latérale**, rangées en **dossiers colorés** (palette ou couleur personnalisée), repliables, avec glisser-déposer pour déplacer et réordonner. Un dossier coloré teinte en pâle tout ce qu'il contient.

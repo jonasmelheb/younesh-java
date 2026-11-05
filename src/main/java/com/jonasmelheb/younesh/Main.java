@@ -12,7 +12,8 @@ import java.util.Map;
 public final class Main {
   public static void main(String[] args) {
     System.setProperty("apple.awt.application.name", "Younesh");
-    System.setProperty("awt.useSystemAAFontSettings", "lcd");
+    // Sous Windows, Java lit le réglage ClearType du système (y compris l'ordre des sous-pixels de l'écran).
+    if (!System.getProperty("os.name", "").toLowerCase().contains("win")) System.setProperty("awt.useSystemAAFontSettings", "lcd");
     // La console de Windows (ConPTY du système), comme la version Electron : la console intégrée à pty4j
     // (OpenConsole.exe copié dans le dossier temporaire) affichait l'invite PowerShell sur un fond blanc.
     System.setProperty("com.pty4j.windows.disable.bundled.conpty", "true");

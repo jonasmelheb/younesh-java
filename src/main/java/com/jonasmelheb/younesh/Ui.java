@@ -35,9 +35,11 @@ import java.awt.GraphicsEnvironment;
 import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.RenderingHints;
+import java.awt.Toolkit;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.geom.Path2D;
+import java.util.Map;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -69,10 +71,17 @@ final class Ui {
     return StyleContext.getDefaultStyleContext().getFont(UI_FONT, bold ? Font.BOLD : Font.PLAIN, 13).deriveFont(size);
   }
 
+  // Lissage du texte : ClearType sous Windows, bien plus net sur un écran externe que le lissage en gris.
+  static void textHints(Graphics2D g) {
+    Object desktop = Shells.WIN ? Toolkit.getDefaultToolkit().getDesktopProperty("awt.font.desktophints") : null;
+    if (desktop instanceof Map<?, ?> hints) g.addRenderingHints(hints);
+    else g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+  }
+
   static Graphics2D smooth(Graphics g0) {
     Graphics2D g = (Graphics2D) g0.create();
     g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-    g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+    textHints(g);
     g.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE);
     return g;
   }
@@ -336,8 +345,22 @@ final class Ui {
   }
 
   // Le « Y » de la signature : écriture manuscrite, dégradé bleu → rose.
+  // Dessiné, pas écrit : aucune police manuscrite n'existe à la fois sur Windows et sur macOS.
   static final class Signature extends JComponent {
-    private final Font font = new Font(firstFont("Segoe Script", "Brush Script MT", "Snell Roundhand"), Font.PLAIN, 22);
+    private static final double[][] CURVES = {
+      {2.6, 10.5, 3.6, 9.6, 5, 8.4}, {7, 6.6, 9, 5, 10.6, 4.8}, {11.6, 4.7, 11.9, 5.6, 11.5, 6.6}, {10.2, 9.5, 7.2, 13.2, 6.6, 16},
+      {6.4, 17, 6.9, 17.2, 7.6, 16.6}, {10, 14.4, 13, 10.6, 15.1, 7.6}, {15.4, 7.1, 16, 7.2, 16.2, 7.8}, {16.4, 8.4, 15.6, 9.4, 15, 10.4},
+      {13.6, 12.8, 12.2, 15, 11.3, 16.9}, {12.6, 17.4, 14, 16.9, 15.3, 16.8}, {14, 18.4, 12, 19.2, 10.9, 19.6}, {10.2, 21, 9.6, 22.6, 9, 24},
+      {8.3, 24, 8.3, 24, 8, 24}, {8.3, 22, 9, 19.8, 9.6, 18.2}, {8.4, 18.8, 6.6, 19.6, 5.6, 19.2}, {4.4, 18.8, 4.4, 17, 5.2, 15.2},
+      {6.4, 12.6, 8.6, 9.6, 9.4, 7.6}, {7.4, 8.8, 5, 10.6, 2.6, 12.2},
+    };
+    private static final Path2D SHAPE = new Path2D.Double();
+
+    static {
+      SHAPE.moveTo(2.6, 12.2);
+      for (double[] c : CURVES) SHAPE.curveTo(c[0], c[1], c[2], c[3], c[4], c[5]);
+      SHAPE.closePath();
+    }
 
     Signature() {
       setPreferredSize(new Dimension(36, 28));
@@ -347,11 +370,9 @@ final class Ui {
     @Override
     protected void paintComponent(Graphics g0) {
       Graphics2D g = smooth(g0);
-      g.setFont(font);
-      int w = g.getFontMetrics().stringWidth("Y");
-      int x = (getWidth() - w) / 2, y = (getHeight() + g.getFontMetrics().getAscent() - g.getFontMetrics().getDescent()) / 2;
-      g.setPaint(new GradientPaint(x, y - 18, Theme.c("#7c9cff"), x + w, y + 2, Theme.c("#f472b6")));
-      g.drawString("Y", x, y);
+      g.translate((getWidth() - 15) / 2.0 - 2, (getHeight() - 21) / 2.0 - 4.5);
+      g.setPaint(new GradientPaint(2, 4, Theme.c("#7c9cff"), 17, 24, Theme.c("#f472b6")));
+      g.fill(SHAPE);
       g.dispose();
     }
   }

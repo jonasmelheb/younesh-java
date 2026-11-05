@@ -34,6 +34,34 @@ public final class Theme {
     return new Color(Integer.parseInt(hex.substring(1), 16));
   }
 
+  // Comme minimumContrastRatio dans la version Electron : le texte trop pâle s'éclaircit ou s'assombrit jusqu'à 4,5:1.
+  static com.jediterm.core.Color readable(Color fg, Color bg) {
+    int target = luminance(bg) < 0.5 ? 255 : 0;
+    Color c = fg;
+    for (float k = 0.05f; contrast(c, bg) < 4.5 && k <= 1; k += 0.05f) {
+      c = new Color(mix(fg.getRed(), target, k), mix(fg.getGreen(), target, k), mix(fg.getBlue(), target, k));
+    }
+    return new com.jediterm.core.Color(c.getRGB() & 0xffffff);
+  }
+
+  private static int mix(int a, int b, float k) {
+    return Math.round(a + (b - a) * k);
+  }
+
+  static double contrast(Color a, Color b) {
+    double x = luminance(a), y = luminance(b);
+    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+  }
+
+  private static double luminance(Color c) {
+    return 0.2126 * linear(c.getRed()) + 0.7152 * linear(c.getGreen()) + 0.0722 * linear(c.getBlue());
+  }
+
+  private static double linear(int v) {
+    double s = v / 255.0;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  }
+
   static String hex(Color c) {
     return String.format("#%02x%02x%02x", c.getRed(), c.getGreen(), c.getBlue());
   }

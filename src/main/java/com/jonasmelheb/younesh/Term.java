@@ -14,7 +14,9 @@ import com.jediterm.terminal.model.hyperlinks.LinkResult;
 import com.jediterm.terminal.model.hyperlinks.LinkResultItem;
 import com.jediterm.terminal.ui.JediTermWidget;
 import com.jediterm.terminal.ui.TerminalActionPresentation;
+import com.jediterm.terminal.ui.TerminalPanel;
 import com.jediterm.terminal.ui.settings.DefaultSettingsProvider;
+import com.jediterm.terminal.ui.settings.SettingsProvider;
 
 import javax.swing.BorderFactory;
 import javax.swing.JLabel;
@@ -52,6 +54,7 @@ final class Term {
   volatile boolean awaiting;   // Claude a répondu depuis la dernière frappe
   volatile boolean inClaude;   // Claude Code tourne dans ce terminal : son titre commence par « ✳ »
   boolean unread, attention;
+  String cwdTail = "";   // fin de la dernière sortie : une annonce de dossier peut être coupée en deux
 
   private static final Pattern CLAUDE_TITLE = Pattern.compile("^[^\\p{L}\\p{N}\\s]\\s+.+$");
 
@@ -63,6 +66,16 @@ final class Term {
       @Override
       protected StyleState createDefaultStyle() {
         return new ThemeStyle();
+      }
+
+      @Override
+      protected TerminalPanel createTerminalPanel(SettingsProvider provider, StyleState style, TerminalTextBuffer buffer) {
+        return new TerminalPanel(provider, buffer, style) {
+          @Override
+          protected void setupAntialiasing(Graphics g) {
+            if (g instanceof Graphics2D g2) Ui.textHints(g2);
+          }
+        };
       }
 
       @Override
@@ -232,7 +245,7 @@ final class Term {
       return new ColorPalette() {
         @Override
         protected Color getForegroundByColorIndex(int i) {
-          return new Color(t.ansi[i].getRGB() & 0xffffff);
+          return Theme.readable(t.ansi[i], t.bg);
         }
 
         @Override

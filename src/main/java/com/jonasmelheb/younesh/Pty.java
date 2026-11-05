@@ -21,6 +21,7 @@ public final class Pty extends ProcessTtyConnector {
   private final PtyProcess process;
   private final String name;
   private final Listener listener;
+  private char[] replay;   // texte de la session précédente, affiché avant la sortie du processus
 
   private Pty(PtyProcess process, String name, Listener listener) {
     super(process, StandardCharsets.UTF_8, null);
@@ -29,8 +30,9 @@ public final class Pty extends ProcessTtyConnector {
     this.listener = listener;
   }
 
-  public static Pty start(List<String> command, String cwd, String name, Listener listener) throws IOException {
+  public static Pty start(List<String> command, String cwd, String name, Map<String, String> extraEnv, Listener listener) throws IOException {
     Map<String, String> env = freshEnv();
+    env.putAll(extraEnv);
     env.put("TERM", "xterm-256color");
     env.put("COLORTERM", "truecolor");
     env.put("TERM_PROGRAM", "Younesh");
@@ -182,6 +184,10 @@ public final class Pty extends ProcessTtyConnector {
   }
 
   // YOUNESH_PTY_LOG=1 : copie brute de ce que le terminal reçoit (256 Ko max), pour comprendre un affichage bizarre.
+  void replay(String text) {
+    replay = text.toCharArray();
+  }
+
   private static Listener log(String name, Listener listener) {
     String env = System.getenv("YOUNESH_PTY_LOG");
     if (env == null || env.isBlank()) return listener;
@@ -203,6 +209,12 @@ public final class Pty extends ProcessTtyConnector {
 
   @Override
   public int read(char[] buf, int offset, int length) throws IOException {
+    if (replay != null) {
+      int count = Math.min(length, replay.length);
+      System.arraycopy(replay, 0, buf, offset, count);
+      replay = count == replay.length ? null : java.util.Arrays.copyOfRange(replay, count, replay.length);
+      return count;
+    }
     int n = super.read(buf, offset, length);
     if (n > 0 && listener != null) listener.onOutput(buf, offset, n);
     return n;

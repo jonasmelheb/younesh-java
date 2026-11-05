@@ -45,6 +45,8 @@ public final class Store {
   public static final class SbxRef {
     public String projet;
     public boolean created;
+    public boolean removed;   // suppression demandée : l'onglet fermé ne se rouvre pas
+    public String image;   // null : celle de la commande « create »
 
     SbxRef(String projet, boolean created) {
       this.projet = projet;
@@ -67,6 +69,9 @@ public final class Store {
     public int fontSize = 14, scrollback = 5000, sidebarWidth = 260;
     public boolean notify;   // notification Windows quand Claude attend : désactivée par défaut
     public boolean ssh;      // connexions SSH et tunnels : désactivés par défaut
+    public boolean restore = true;   // retrouver le contenu des terminaux au redémarrage
+    public boolean autoUpdate = true;   // télécharge les nouvelles versions et remplace le .jar à la fermeture
+    public String sbxImage;  // dernière image de sandbox saisie
     public Sbx.Config sbx;   // configuration sbx importée ou modifiée (null : celle par défaut)
     public List<String> sbxLastInstalls = new ArrayList<>();
     public java.util.Map<String, Boolean> sbxDone = new java.util.HashMap<>();
@@ -74,6 +79,7 @@ public final class Store {
 
   public List<Folder> folders = new ArrayList<>();
   public List<Session> sessions = new ArrayList<>();
+  public List<Session> closed = new ArrayList<>();   // derniers onglets fermés, à rouvrir
   public List<Tunnel> tunnels = new ArrayList<>();
   public Settings settings = new Settings();
   public String activeId;

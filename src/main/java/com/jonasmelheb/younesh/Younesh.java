@@ -55,6 +55,7 @@ import java.util.regex.Pattern;
 // La fenêtre : barre latérale à gauche, terminal de la discussion active à droite (comme index.html).
 final class Younesh extends JFrame implements Sidebar.Actions {
   final Store store = Store.load();
+  private final Map<String, String> buffers = store.settings.restore ? Buffers.load() : new HashMap<>();
   private final Map<String, Term> terms = new HashMap<>();
   private final Map<String, String> branches = new HashMap<>();
   private Theme theme = Theme.of(store.settings.theme);
@@ -77,6 +78,7 @@ final class Younesh extends JFrame implements Sidebar.Actions {
   private Ui.Btn quickBtn, sbxBtn, sshBtn, folderBtn;
   private final Ui.Btn tunnelsBtn = new Ui.Btn("", Ui.Kind.GHOST);
   private Timer toastTimer;
+  private Runnable toastAction;
   private TrayIcon tray;
   private Image icon;
 
@@ -85,7 +87,10 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     Ui.theme = theme;
     try {
       icon = ImageIO.read(Younesh.class.getResource("/icon.png"));
-      setIconImage(icon);
+      // Toutes les tailles : Windows prend la bonne au lieu de réduire la grande, ce qui la rendait floue.
+      List<Image> sizes = new java.util.ArrayList<>();
+      for (int size : new int[]{16, 20, 24, 32, 40, 48, 64, 128, 256}) sizes.add(ImageIO.read(Younesh.class.getResource("/icon-" + size + ".png")));
+      setIconImages(sizes);
     } catch (IOException | RuntimeException ignored) {
     }
     setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
@@ -126,6 +131,15 @@ final class Younesh extends JFrame implements Sidebar.Actions {
 
     toast.setVisible(false);
     toast.setOpaque(false);
+    toast.addMouseListener(new java.awt.event.MouseAdapter() {
+      @Override
+      public void mouseClicked(java.awt.event.MouseEvent e) {
+        if (toastAction == null) return;
+        Runnable run = toastAction;
+        toast.setVisible(false);
+        run.run();
+      }
+    });
     getLayeredPane().add(toast, JLayeredPane.POPUP_LAYER);
 
     if (store.bounds != null && store.bounds.length == 4) {
@@ -159,6 +173,8 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(this::shortcut);
     new Timer(500, e -> watchAttention()).start();
     new Timer(4000, e -> refreshBranches()).start();
+    if (!Shells.WIN) new Timer(5000, e -> pollCwds()).start();
+    new Timer(60000, e -> saveBuffers()).start();
 
     applyTheme();
     refreshBranches();
@@ -167,6 +183,7 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     applySshUi();
     if (store.settings.ssh) Ssh.startAuto(this);
     setVisible(true);
+    Updater.start(this);
   }
 
   // ---------- Construction de l'interface ----------
@@ -252,6 +269,8 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     tunnelsBtn.addActionListener(e -> Ssh.tunnels(this, null));
     JPanel east = new JPanel(new BorderLayout(4, 0));
     east.setOpaque(false);
+    String version = Younesh.class.getPackage().getImplementationVersion();
+    if (version != null) east.add(Ui.label("v" + version, 11, null), BorderLayout.WEST);
     east.add(tunnelsBtn, BorderLayout.CENTER);
     east.add(new Ui.Signature(), BorderLayout.EAST);
     p.add(east, BorderLayout.EAST);
@@ -398,18 +417,21 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     if (s.ssh != null) {
       line = Ssh.command(Pty.freshEnv(), s.ssh, List.of());
     } else {
-      String cmd = "sandbox".equals(s.kind) && s.sbx != null ? Sbx.startup(Sbx.config(store.settings), s) : Shells.startupCommand(s, shell);
-      line = Shells.commandLine(shell, cmd);
+      String cmd = "sandbox".equals(s.kind) && s.sbx != null ? Sbx.startup(Sbx.config(store.settings), s, shell) : Shells.startupCommand(s, shell);
+      line = followsCwd(s) ? Shells.announcingLine(shell) : Shells.commandLine(shell, cmd);
     }
     Pty pty;
     try {
-      pty = Pty.start(line, cwd, s.name, (buf, off, len) -> onOutput(t, buf, off, len));
+      Map<String, String> env = s.ssh == null && followsCwd(s) ? Shells.announcingEnv(shell) : Map.of();
+      pty = Pty.start(line, cwd, s.name, env, (buf, off, len) -> onOutput(t, buf, off, len));
     } catch (IOException | RuntimeException e) {
       error(s.ssh != null ? "ssh est introuvable sur ce PC. Installe le « Client OpenSSH » : Paramètres › Système › Fonctionnalités facultatives."
         : "Impossible de lancer " + shell.name() + " :\n" + e.getMessage());
       t.exited = true;
       return;
     }
+    String saved = buffers.remove(s.id);
+    if (saved != null) pty.replay(saved + "\r\n\u001b[2m──── session précédente ────\u001b[0m\r\n");
     t.pty = pty;
     t.widget.setTtyConnector(pty);
     t.widget.start();
@@ -463,7 +485,101 @@ final class Younesh extends JFrame implements Sidebar.Actions {
   }
 
   // Appelé par le fil de lecture du terminal.
+  // Un terminal classique rouvre là où il en était. Claude reste dans son dossier d'origine, dont dépend la reprise.
+  private static boolean followsCwd(Store.Session s) {
+    return "shell".equals(s.kind) && s.helper == null && (s.command == null || s.command.isBlank());
+  }
+
+  private static final Pattern CWD_ANNOUNCE = Pattern.compile("\u001b\\]9;9;\"?([^\u0007\u001b\"]*)\"?(?:\u0007|\u001b\\\\)");
+
+  private void watchCwd(Term t, char[] buf, int off, int len) {
+    if (!followsCwd(t.session)) return;
+    String text = t.cwdTail + new String(buf, off, len);
+    Matcher m = CWD_ANNOUNCE.matcher(text);
+    String dir = null;
+    int end = 0;
+    while (m.find()) {
+      dir = m.group(1);
+      end = m.end();
+    }
+    int open = text.lastIndexOf("\u001b]9;9;");
+    int keep = open >= end && text.length() - open < 4096 ? open : Math.max(end, text.length() - 6);
+    t.cwdTail = text.substring(keep);
+    if (dir != null) setCwd(t.session, dir);
+  }
+
+  private void setCwd(Store.Session s, String dir) {
+    SwingUtilities.invokeLater(() -> {
+      if (dir.isBlank() || dir.equals(s.cwd)) return;
+      s.cwd = dir;
+      save();
+      if (s.id.equals(store.activeId)) updateTopbar();
+    });
+  }
+
+  // Mac et Linux : le dossier se lit sur le processus du shell.
+  private void pollCwds() {
+    for (Term t : terms.values()) {
+      Pty pty = t.pty;
+      if (pty == null || !t.running || !followsCwd(t.session)) continue;
+      Thread reader = new Thread(() -> {
+        String dir = readCwd(pty.process().pid());
+        if (dir != null) setCwd(t.session, dir);
+      }, "younesh-cwd");
+      reader.setDaemon(true);
+      reader.start();
+    }
+  }
+
+  private static String readCwd(long pid) {
+    try {
+      java.nio.file.Path proc = java.nio.file.Path.of("/proc", String.valueOf(pid), "cwd");
+      if (java.nio.file.Files.exists(proc)) return java.nio.file.Files.readSymbolicLink(proc).toString();
+      Process p = new ProcessBuilder("lsof", "-a", "-p", String.valueOf(pid), "-d", "cwd", "-Fn").redirectErrorStream(true).start();
+      p.getOutputStream().close();
+      String out = new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+      return out.lines().filter(l -> l.startsWith("n")).map(l -> l.substring(1)).findFirst().orElse(null);
+    } catch (java.io.IOException | RuntimeException e) {
+      return null;
+    }
+  }
+
+  private static boolean keepsBuffer(Store.Session s) {
+    return "shell".equals(s.kind) || "ssh".equals(s.kind);
+  }
+
+  private void saveBuffers() {
+    if (!store.settings.restore) return;
+    for (Term t : terms.values()) {
+      if (keepsBuffer(t.session) && (t.running || t.exited)) buffers.put(t.session.id, Buffers.serialize(t.widget.getTerminalTextBuffer()));
+    }
+    buffers.keySet().removeIf(id -> store.session(id) == null && store.closed.stream().noneMatch(c -> c.id.equals(id)));
+    Buffers.save(buffers);
+  }
+
+  private static final int CLOSED_MAX = 10;
+
+  private void rememberClosed(Store.Session s, Term t) {
+    if (t != null && store.settings.restore && keepsBuffer(s)) buffers.put(s.id, Buffers.serialize(t.widget.getTerminalTextBuffer()));
+    store.closed.add(s);
+    while (store.closed.size() > CLOSED_MAX) buffers.remove(store.closed.remove(0).id);
+    toast("« " + s.name + " » est fermée.", 8000, "Rouvrir", this::reopenClosed);
+  }
+
+  // Rouvre le dernier onglet fermé : son dossier, sa conversation Claude ou sa sandbox.
+  void reopenClosed() {
+    if (store.closed.isEmpty()) {
+      toast("Aucune discussion fermée à rouvrir.");
+      return;
+    }
+    Store.Session s = store.closed.remove(store.closed.size() - 1);
+    store.sessions.add(s);
+    activate(s);
+  }
+
   private void onOutput(Term t, char[] buf, int off, int len) {
+    Sbx.watchInstall(this, t.session, buf, off, len);
+    watchCwd(t, buf, off, len);
     long now = System.currentTimeMillis();
     t.lastOutput = now;
     boolean bell = false;
@@ -749,6 +865,7 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     if ((running || !linked.isEmpty()) && !confirm("Fermer « " + s.name + " » ?" + (running ? " Le processus en cours sera arrêté." : "")
       + (linked.isEmpty() ? "" : " Ses " + linked.size() + " tunnel(s) seront supprimés."))) return;
     for (Store.Tunnel tn : linked) Ssh.delete(this, tn);
+    if (s.helper == null && (s.sbx == null || !s.sbx.removed)) rememberClosed(s, t);
     terms.remove(s.id);
     if (t != null) {
       Pty pty = t.pty;
@@ -970,6 +1087,7 @@ final class Younesh extends JFrame implements Sidebar.Actions {
           Store.Session s = store.session(store.activeId);
           if (s != null) close(s);
         };
+        case KeyEvent.VK_R -> action = this::reopenClosed;
         case KeyEvent.VK_B -> action = () -> {
           sidebarPanel.setVisible(!sidebarPanel.isVisible());
           if (sidebarPanel.isVisible()) split.setDividerLocation(store.settings.sidebarWidth);
@@ -1000,7 +1118,16 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     toast(text, 3500);
   }
 
+  // Un message avec action : un clic dessus la lance.
+  void toast(String text, int ms, String label, Runnable action) {
+    toast(text + "  ▸ " + label, ms);
+    toastAction = action;
+    toast.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
+  }
+
   void toast(String text, int ms) {
+    toastAction = null;
+    toast.setCursor(java.awt.Cursor.getDefaultCursor());
     String html = text.replace("&", "&amp;").replace("<", "&lt;");
     toast.setText("<html><div style='padding:2px 4px'>" + html + "</div></html>");
     toast.setFont(Ui.font(13, false));
@@ -1032,8 +1159,9 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     store.save();
   }
 
-  private void quit() {
+  void quit() {
     save();
+    saveBuffers();
     Ssh.killAll();
     for (Term t : terms.values()) {
       if (t.pty != null) t.pty.close();
@@ -1072,6 +1200,7 @@ final class Younesh extends JFrame implements Sidebar.Actions {
       m.put("Nouveau tunnel SSH", () -> Ssh.form(this, null, null));
     }
     m.put("Nouveau dossier", this::createFolder);
+    m.put("Rouvrir la dernière discussion fermée", this::reopenClosed);
     m.put("Réglages", () -> Dialogs.settings(this));
     m.put("Aller à la discussion qui attend", this::jumpToAttention);
     return m;

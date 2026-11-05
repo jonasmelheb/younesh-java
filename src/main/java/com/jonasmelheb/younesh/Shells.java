@@ -95,6 +95,24 @@ public final class Shells {
     return line;
   }
 
+  // À chaque invite, le shell annonce son dossier (OSC 9;9), ce que PowerShell, cmd et Git Bash ne font pas seuls.
+  // Hors de Windows, zsh ne peut pas être configuré de l'extérieur : Younesh lit le dossier sur son processus.
+  private static final String PS_ANNOUNCE_CWD = "$global:__younesh_prompt=$function:prompt;function global:prompt{try{if($PWD.Provider.Name -eq 'FileSystem'){[Console]::Write('{0}]9;9;{1}{0}\\' -f [char]27,$PWD.ProviderPath)}}catch{};& $global:__younesh_prompt}";
+
+  public static List<String> announcingLine(Shell shell) {
+    List<String> line = new ArrayList<>();
+    line.add(shell.path());
+    line.addAll(shell.args());
+    if ("powershell".equals(shell.family())) line.addAll(List.of("-NoExit", "-Command", PS_ANNOUNCE_CWD));
+    return line;
+  }
+
+  public static java.util.Map<String, String> announcingEnv(Shell shell) {
+    if ("cmd".equals(shell.family())) return java.util.Map.of("PROMPT", "$e]9;9;$P$e\\$P$G");
+    if ("gitbash".equals(shell.id())) return java.util.Map.of("PROMPT_COMMAND", "printf '\\033]9;9;%s\\033\\\\' \"$(pwd -W)\"");
+    return java.util.Map.of();
+  }
+
   private static final Pattern GITDIR = Pattern.compile("gitdir:\\s*(.+)");
   private static final Pattern REF = Pattern.compile("^ref: refs/heads/(.+)$");
 

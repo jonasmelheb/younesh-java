@@ -95,7 +95,7 @@ final class Sbx {
       "version": 1,
       "cli": {
         "create": "sbx run --name={projet} --clone claude .",
-        "open": "sbx run {projet}",
+        "open": "sbx run --name={projet}",
         "exec": "sbx exec -it {projet} bash -lc \\"{script}\\"",
         "remove": "sbx rm {projet}"
       },
@@ -117,7 +117,10 @@ final class Sbx {
   }
 
   static Config config(Store.Settings st) {
-    return st.sbx != null ? st.sbx : defaults();
+    Config cfg = st.sbx != null ? st.sbx : defaults();
+    // « sbx run <nom> » est déprécié depuis sbx 0.33 : les configurations enregistrées ou importées passent à --name.
+    if (cfg.cli != null && cfg.cli.open != null && cfg.cli.open.trim().equals("sbx run {projet}")) cfg.cli.open = "sbx run --name={projet}";
+    return cfg;
   }
 
   static String slug(String name) {
@@ -137,20 +140,38 @@ final class Sbx {
     return out.toString();
   }
 
-  static String startup(Config cfg, Store.Session s) {
-    return fill(s.sbx.created ? cfg.cli.open : cfg.cli.create, Map.of("projet", s.sbx.projet, "dossier", "\"" + s.cwd + "\""));
+  private static String imageOf(String create) {
+    Matcher m = Pattern.compile("\\s--template=(\\S+)").matcher(create);
+    return m.find() ? m.group(1) : "";
+  }
+
+  private static String createWithImage(String create, String image) {
+    String bare = create.replaceFirst("\\s+--template=\\S+", "");
+    return image.isEmpty() ? bare : bare.replaceFirst("^\\s*\\S+\\s+\\S+", "$0 --template=" + Matcher.quoteReplacement(image));
+  }
+
+  static String startup(Config cfg, Store.Session s, Shells.Shell shell) {
+    Map<String, String> vars = Map.of("projet", s.sbx.projet, "dossier", "\"" + s.cwd + "\"");
+    if (!s.sbx.created) return fill(s.sbx.image == null ? cfg.cli.create : createWithImage(cfg.cli.create, s.sbx.image), vars);
+    String open = fill(cfg.cli.open, vars);
+    if (open.contains(" -- ") || !cfg.cli.create.matches(".*\\bclaude\\b.*")) return open;
+    // Reprend la dernière conversation de la sandbox ; s'il n'y en a pas encore, Claude démarre normalement.
+    String resume = open + " -- --continue";
+    return "powershell".equals(shell.family()) ? resume + "; if (-not $?) { " + open + " }" : resume + " || " + open;
   }
 
   // Les étapes d'installation partent en un seul « exec ». Le script est encodé en base64 pour
   // traverser PowerShell, cmd ou bash sans souci de guillemets ni de « $ », puis lancé depuis un
   // fichier pour garder le clavier (sudo, questions éventuelles).
+  private static final String INSTALL_DONE = "==> Installation terminée.";
+
   static String installCommand(Config cfg, String projet, List<Install> items) {
     List<String> lines = new ArrayList<>(List.of("set -e"));
     for (Install it : items) {
       lines.add("echo; echo \"==> " + it.label.replace("\"", "") + "\"");
       lines.add(it.script);
     }
-    lines.add("echo; echo \"==> Installation terminée. Relance Claude : clic droit sur la sandbox, Rouvrir Claude.\"");
+    lines.add("echo; echo \"" + INSTALL_DONE + " Relance Claude : clic droit sur la sandbox, Rouvrir Claude.\"");
     String b64 = Base64.getEncoder().encodeToString(String.join("\n", lines).getBytes(StandardCharsets.UTF_8));
     String script = "echo " + b64 + " | base64 -d > /tmp/younesh-install.sh && bash /tmp/younesh-install.sh";
     return fill(cfg.cli.exec, Map.of("projet", projet, "script", script));
@@ -217,22 +238,80 @@ final class Sbx {
 
   // ---------- Actions ----------
 
-  static void create(Younesh app, String projet, String dir, String folderId, List<Install> items) {
+  static void create(Younesh app, String projet, String dir, String folderId, List<Install> items, String image) {
     Store.Session s = new Store.Session();
     s.kind = "sandbox";
     s.name = projet;
     s.cwd = dir;
     s.folderId = folderId;
     s.sbx = new Store.SbxRef(projet, false);
+    s.sbx.image = image;
     app.createSession(s);
     if (!items.isEmpty()) {
       Store.Session h = helper(app, "Installation · " + projet, dir, folderId, installCommand(config(app.store.settings), projet, items), false);
       app.placeAfter(h, s);
       app.activate(s);
-      app.toast("Sandbox « " + projet + " » : connecte-toi dans Claude (/login). Une fois Claude ouvert, va dans « Installation · " + projet + " » et appuie sur Entrée.", 15000);
+      runWhenReady(app, projet, h);
+      app.toast("Sandbox « " + projet + " » : connecte-toi dans Claude (/login). Les commandes se lanceront seules dans « Installation · " + projet + " » dès que la sandbox tourne.", 15000);
     } else {
       app.toast("Sandbox « " + projet + " » : connecte-toi dans Claude avec /login la première fois.", 9000);
     }
+  }
+
+  // Les discussions d'installation en cours : id de la discussion → sandbox et fin de la sortie reçue.
+  private static final class Watch {
+    final String projet;
+    String tail = "";
+
+    Watch(String projet) {
+      this.projet = projet;
+    }
+  }
+
+  private static final Map<String, Watch> INSTALLING = new java.util.concurrent.ConcurrentHashMap<>();
+  private static final int READY_TRIES = 200;
+
+  // La commande est déjà tapée dans la discussion d'installation : on la valide dès que « sbx ls » montre
+  // la sandbox en marche. Après 10 minutes sans la voir, on rend la main : Entrée la lance toujours.
+  static void runWhenReady(Younesh app, String projet, Store.Session helper) {
+    INSTALLING.put(helper.id, new Watch(projet));
+    Thread t = new Thread(() -> {
+      for (int i = 0; i < READY_TRIES; i++) {
+        boolean up = false;
+        try {
+          up = list().stream().anyMatch(x -> x.name().equals(projet) && x.status().toLowerCase(Locale.ROOT).startsWith("running"));
+        } catch (IOException ignored) {
+        }
+        boolean ready = up && app.running(helper) && helper.prefill == null;
+        try {
+          Thread.sleep(ready ? 2000 : 3000);
+        } catch (InterruptedException e) {
+          return;
+        }
+        if (ready) {
+          SwingUtilities.invokeLater(() -> app.type(helper, "\r"));
+          return;
+        }
+      }
+      INSTALLING.remove(helper.id);
+      SwingUtilities.invokeLater(() -> app.toast("La sandbox « " + projet + " » n'a pas démarré. Quand elle tourne, va dans « Installation · " + projet + " » et appuie sur Entrée.", 30000));
+    }, "younesh-sbx-ready");
+    t.setDaemon(true);
+    t.start();
+  }
+
+  // Claude doit être rouvert pour voir ce qu'on vient d'installer. On le propose sans le faire : un /login peut être en cours.
+  static void watchInstall(Younesh app, Store.Session s, char[] buf, int off, int len) {
+    Watch w = INSTALLING.get(s.id);
+    if (w == null) return;
+    String tail = w.tail + new String(buf, off, len);
+    w.tail = tail.substring(Math.max(0, tail.length() - 200));
+    if (!w.tail.contains(INSTALL_DONE) || INSTALLING.remove(s.id) == null) return;
+    SwingUtilities.invokeLater(() -> {
+      Store.Session sandbox = app.store.sessions.stream().filter(x -> x.sbx != null && w.projet.equals(x.sbx.projet)).findFirst().orElse(null);
+      if (sandbox == null) app.toast("Installation terminée dans « " + w.projet + " ».", 15000);
+      else app.toast("Installation terminée dans « " + w.projet + " ».", 120000, "Rouvrir Claude", () -> app.restart(sandbox));
+    });
   }
 
   // Rouvre dans Younesh une sandbox créée ailleurs (autre terminal, tableau de bord sbx) ou dont la discussion a été fermée.
@@ -282,6 +361,8 @@ final class Sbx {
     if (!app.confirm("Supprimer la sandbox « " + projet + " » ?\n\nAvant, récupère les commits non poussés : git fetch sandbox-" + projet
       + "\n\nLa commande de suppression sera tapée dans une discussion, à valider avec Entrée.")) return;
     app.stop(s);
+    s.sbx.removed = true;
+    app.save();
     helper(app, "Commandes sbx · " + projet, s.cwd, s.folderId,
       fill(config(app.store.settings).cli.remove, Map.of("projet", projet, "dossier", "\"" + s.cwd + "\"")), false);
   }
@@ -310,19 +391,21 @@ final class Sbx {
       if (!edited[0]) name.setText(slug(Younesh.basename(cwd.getText())));
     });
     JComboBox<Dialogs.Choice> folder = Dialogs.folderChoice(app, folder0);
-    List<JCheckBox> boxes = new ArrayList<>();
+    JTextField image = Ui.input(st.sbxImage != null ? st.sbxImage : imageOf(cfg.cli.create), null);
+    Set<String> selected = new LinkedHashSet<>(st.sbxLastInstalls);
     m.field("Dossier du projet", Ui.Modal.row(cwd, Dialogs.browse(app, cwd)));
     m.field("Nom de la sandbox", name);
     m.field("Ranger dans", folder);
-    m.field("Installer dans la sandbox", installChecks(cfg, st.sbxLastInstalls, boxes));
+    m.field("Image de la sandbox (facultatif)", image);
+    m.field("Installer dans la sandbox", installs(app, m, selected));
     m.field(null, links(m, app));
     m.validate = () -> !cwd.getText().isBlank();
     if (!m.open(app)) return;
 
-    List<String> checked = boxes.stream().filter(JCheckBox::isSelected).map(b -> (String) b.getClientProperty("id")).toList();
-    st.sbxLastInstalls = new ArrayList<>(checked);
-    create(app, slug(name.getText()), cwd.getText().trim(), Dialogs.folderOf(folder),
-      cfg.installs.stream().filter(it -> checked.contains(it.id)).toList());
+    List<Install> items = config(st).installs.stream().filter(it -> selected.contains(it.id)).toList();
+    st.sbxLastInstalls = new ArrayList<>(items.stream().map(it -> it.id).toList());
+    st.sbxImage = image.getText().replaceAll("\\s+", "");
+    create(app, slug(name.getText()), cwd.getText().trim(), Dialogs.folderOf(folder), items, st.sbxImage);
   }
 
   // « Préparer le poste » et « Configurer sbx » sous le formulaire, comme les liens de la version Electron.
@@ -339,30 +422,127 @@ final class Sbx {
     return p;
   }
 
-  private static JComponent installChecks(Config cfg, List<String> checked, List<JCheckBox> boxes) {
+  // Les commandes enregistrées : cases à cocher, plus ajouter, modifier et supprimer sur place.
+  private static JComponent installs(Younesh app, Ui.Modal m, Set<String> selected) {
     JPanel p = new JPanel();
     p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
     p.setOpaque(false);
-    if (cfg.installs.isEmpty()) p.add(Ui.label("Aucune installation configurée (Configurer sbx).", 12, null));
+    drawInstalls(app, m, p, selected);
+    return p;
+  }
+
+  private static void drawInstalls(Younesh app, Ui.Modal m, JPanel p, Set<String> selected) {
+    Runnable redraw = () -> {
+      drawInstalls(app, m, p, selected);
+      m.refit();
+    };
+    Config cfg = config(app.store.settings);
+    p.removeAll();
+    if (cfg.installs.isEmpty()) p.add(Ui.label("Aucune commande enregistrée.", 12, null));
     for (Install it : cfg.installs) {
-      JCheckBox b = new JCheckBox(it.label, checked.contains(it.id));
-      b.putClientProperty("id", it.id);
+      JCheckBox b = new JCheckBox(it.label, selected.contains(it.id));
       b.setOpaque(false);
       b.setFont(Ui.font(12.5f, false));
       b.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
-      boxes.add(b);
-      p.add(b);
+      b.addActionListener(e -> {
+        if (b.isSelected()) selected.add(it.id); else selected.remove(it.id);
+      });
+      Ui.Btn edit = new Ui.Btn("✎", Ui.Kind.ICON);
+      edit.setToolTipText("Modifier");
+      edit.addActionListener(e -> {
+        if (editInstall(app, it, selected)) redraw.run();
+      });
+      Ui.Btn del = new Ui.Btn("✕", Ui.Kind.ICON);
+      del.setToolTipText("Supprimer");
+      del.addActionListener(e -> {
+        if (!app.confirm("Supprimer la commande « " + it.label + " » ?")) return;
+        cfg.installs.remove(it);
+        selected.remove(it.id);
+        app.store.settings.sbx = cfg;
+        app.save();
+        redraw.run();
+      });
+      JPanel side = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+      side.setOpaque(false);
+      side.add(edit);
+      side.add(del);
+      JPanel row = new JPanel(new BorderLayout(6, 0));
+      row.setOpaque(false);
+      row.setAlignmentX(JComponent.LEFT_ALIGNMENT);
+      row.add(b, BorderLayout.CENTER);
+      row.add(side, BorderLayout.EAST);
+      row.setMaximumSize(new Dimension(Integer.MAX_VALUE, row.getPreferredSize().height));
+      p.add(row);
     }
-    return p;
+    Ui.Btn add = new Ui.Btn("+ Ajouter une commande", Ui.Kind.GHOST);
+    add.setAlignmentX(JComponent.LEFT_ALIGNMENT);
+    add.addActionListener(e -> {
+      if (editInstall(app, null, selected)) redraw.run();
+    });
+    p.add(Box.createVerticalStrut(4));
+    p.add(add);
+    p.revalidate();
+    p.repaint();
+  }
+
+  // Ajoute (item null) ou modifie une commande enregistrée. Une nouvelle commande est cochée d'office.
+  private static boolean editInstall(Younesh app, Install item, Set<String> selected) {
+    Ui.Modal m = new Ui.Modal(app, item == null ? "Ajouter une commande" : "Modifier la commande", "Enregistrer");
+    JTextField label = Ui.input(item == null ? "" : item.label, "Plugin de l'équipe");
+    JTextArea script = new JTextArea(item == null ? "" : item.script, 4, 40);
+    script.setLineWrap(true);
+    script.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+    script.setBackground(Ui.t().bg);
+    script.setForeground(Ui.t().text);
+    script.setCaretColor(Ui.t().text);
+    script.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
+    JScrollPane sp = new JScrollPane(script);
+    sp.setBorder(BorderFactory.createLineBorder(Ui.t().border));
+    m.field("Nom", label);
+    m.field("Commande, lancée dans la sandbox", sp);
+    m.validate = () -> !label.getText().isBlank() && !script.getText().isBlank();
+    if (!m.open(app)) return false;
+    Store.Settings st = app.store.settings;
+    Config cfg = config(st);
+    if (item != null) {
+      item.label = label.getText().trim();
+      item.script = script.getText().trim();
+    } else {
+      Install it = new Install();
+      it.id = slug(label.getText());
+      while (true) {
+        String id = it.id;
+        if (cfg.installs.stream().noneMatch(x -> x.id.equals(id))) break;
+        it.id += "-2";
+      }
+      it.label = label.getText().trim();
+      it.script = script.getText().trim();
+      cfg.installs.add(it);
+      selected.add(it.id);
+    }
+    st.sbx = cfg;
+    app.save();
+    return true;
   }
 
   static void existing(Younesh app, String folderId) {
     Ui.Modal m = new Ui.Modal(app, "Ouvrir une sandbox existante", null);
+    JTextField filter = Ui.input("", "Filtrer par nom ou dossier…");
+    m.field(null, filter);
     JPanel list = new JPanel();
     list.setLayout(new BoxLayout(list, BoxLayout.Y_AXIS));
     list.setOpaque(false);
     list.add(Ui.label("Recherche des sandboxes (sbx ls)…", 12, null));
-    m.field(null, list);
+    JPanel top = new JPanel(new BorderLayout());
+    top.setOpaque(false);
+    top.add(list, BorderLayout.NORTH);
+    JScrollPane scroll = new JScrollPane(top);
+    scroll.setBorder(null);
+    scroll.setOpaque(false);
+    scroll.getViewport().setOpaque(false);
+    scroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+    scroll.setPreferredSize(new Dimension(440, 320));
+    m.field(null, scroll);
     Ui.Btn nw = new Ui.Btn("Nouvelle sandbox…", Ui.Kind.NORMAL);
     nw.addActionListener(e -> {
       m.dispose();
@@ -380,18 +560,29 @@ final class Sbx {
       List<Existing> result = found;
       String problem = error;
       SwingUtilities.invokeLater(() -> {
-        list.removeAll();
-        if (problem != null) list.add(Ui.label("<html><div style='width:380px'>" + esc(problem) + "</div></html>", 12, null));
-        else if (result.isEmpty()) list.add(Ui.label("Aucune sandbox sur ce PC.", 12, null));
-        for (Existing x : result) {
-          boolean known = app.store.sessions.stream().anyMatch(s -> s.sbx != null && x.name().equals(s.sbx.projet));
-          if (list.getComponentCount() > 0) list.add(Box.createVerticalStrut(4));
-          list.add(existingRow(x, known, () -> {
-            m.dispose();
-            SwingUtilities.invokeLater(() -> openExisting(app, x, folderId));
-          }));
-        }
-        m.refit();
+        // Les sandboxes déjà ouvertes dans Younesh passent en bas de la liste, avec un badge : un clic y ramène.
+        List<Existing> sorted = new ArrayList<>(result);
+        sorted.sort(java.util.Comparator.comparing(x -> isOpen(app, x)));
+        Runnable draw = () -> {
+          list.removeAll();
+          String q = filter.getText().trim().toLowerCase(Locale.ROOT);
+          List<Existing> shown = sorted.stream().filter(x -> (x.name() + " " + x.workspace()).toLowerCase(Locale.ROOT).contains(q)).toList();
+          if (problem != null) list.add(Ui.label("<html><div style='width:380px'>" + esc(problem) + "</div></html>", 12, null));
+          else if (result.isEmpty()) list.add(Ui.label("Aucune sandbox sur ce PC.", 12, null));
+          else if (shown.isEmpty()) list.add(Ui.label("Aucune sandbox ne correspond.", 12, null));
+          for (Existing x : shown) {
+            boolean known = app.store.sessions.stream().anyMatch(s -> s.sbx != null && x.name().equals(s.sbx.projet));
+            if (list.getComponentCount() > 0) list.add(Box.createVerticalStrut(4));
+            list.add(existingRow(x, known, isOpen(app, x), () -> {
+              m.dispose();
+              SwingUtilities.invokeLater(() -> openExisting(app, x, folderId));
+            }));
+          }
+          list.revalidate();
+          list.repaint();
+        };
+        onChange(filter, draw);
+        draw.run();
       });
     }, "younesh-sbx-ls");
     worker.setDaemon(true);
@@ -399,8 +590,12 @@ final class Sbx {
     m.open(app);
   }
 
-  private static JComponent existingRow(Existing x, boolean known, Runnable open) {
-    String sub = String.join(" · ", Stream.of(x.status(), x.workspace().isEmpty() ? null : Sidebar.shortPath(x.workspace()), known ? "déjà dans Younesh" : null)
+  private static boolean isOpen(Younesh app, Existing x) {
+    return app.store.sessions.stream().anyMatch(s -> s.sbx != null && x.name().equals(s.sbx.projet) && app.running(s));
+  }
+
+  private static JComponent existingRow(Existing x, boolean known, boolean opened, Runnable open) {
+    String sub = String.join(" · ", Stream.of(x.status(), x.workspace().isEmpty() ? null : Sidebar.shortPath(x.workspace()), known && !opened ? "déjà dans Younesh" : null)
       .filter(v -> v != null && !v.isEmpty()).toList());
     boolean[] hover = {false};
     JPanel r = new JPanel(new BorderLayout(10, 0)) {
@@ -427,6 +622,7 @@ final class Sbx {
     if (!sub.isEmpty()) text.add(Ui.label(sub, 11, null));
     r.add(icon, BorderLayout.WEST);
     r.add(text, BorderLayout.CENTER);
+    if (opened) r.add(Ui.label("Déjà ouverte", 11, Theme.SANDBOX), BorderLayout.EAST);
     r.setMaximumSize(new Dimension(Integer.MAX_VALUE, r.getPreferredSize().height));
     r.addMouseListener(new MouseAdapter() {
       @Override
@@ -450,15 +646,14 @@ final class Sbx {
   }
 
   static void install(Younesh app, Store.Session s) {
-    Config cfg = config(app.store.settings);
     Ui.Modal m = new Ui.Modal(app, "Installer dans « " + s.sbx.projet + " »", "Préparer");
-    List<JCheckBox> boxes = new ArrayList<>();
-    m.field("À installer", installChecks(cfg, List.of(), boxes),
-      "La commande est tapée dans une discussion d'installation : appuie sur Entrée quand la sandbox tourne.");
+    Set<String> selected = new LinkedHashSet<>();
+    m.field("À installer", installs(app, m, selected),
+      "Les commandes se lancent seules dans une discussion d'installation dès que la sandbox tourne.");
     if (!m.open(app)) return;
-    List<String> checked = boxes.stream().filter(JCheckBox::isSelected).map(b -> (String) b.getClientProperty("id")).toList();
-    List<Install> items = cfg.installs.stream().filter(it -> checked.contains(it.id)).toList();
-    if (!items.isEmpty()) helper(app, "Installation · " + s.sbx.projet, s.cwd, s.folderId, installCommand(cfg, s.sbx.projet, items), false);
+    Config cfg = config(app.store.settings);
+    List<Install> items = cfg.installs.stream().filter(it -> selected.contains(it.id)).toList();
+    if (!items.isEmpty()) runWhenReady(app, s.sbx.projet, helper(app, "Installation · " + s.sbx.projet, s.cwd, s.folderId, installCommand(cfg, s.sbx.projet, items), false));
   }
 
   // ---------- Préparer le poste ----------

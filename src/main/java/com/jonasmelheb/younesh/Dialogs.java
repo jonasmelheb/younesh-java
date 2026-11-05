@@ -135,6 +135,8 @@ final class Dialogs {
     JSpinner size = new JSpinner(new SpinnerNumberModel(st.fontSize, 9, 28, 1));
     JSpinner scrollback = new JSpinner(new SpinnerNumberModel(st.scrollback, 1000, 100000, 1000));
     JCheckBox notify = new JCheckBox("Notification Windows quand Claude attend ta réponse", st.notify);
+    JCheckBox restore = new JCheckBox("Retrouver le contenu des terminaux au redémarrage", st.restore);
+    JCheckBox update = new JCheckBox("Mettre à jour Younesh automatiquement", st.autoUpdate);
     JCheckBox ssh = new JCheckBox("Activer SSH : connexions aux serveurs et tunnels (redirection de ports)", st.ssh);
 
     m.field("Shell par défaut", shell);
@@ -151,6 +153,8 @@ final class Dialogs {
     m.field("Sandbox sbx", sbx);
     m.field("Apparence", theme);
     m.check(notify);
+    m.check(restore);
+    m.check(update);
     m.check(ssh);
     m.field("Police", font);
     m.field("Taille du texte", size);
@@ -166,6 +170,8 @@ final class Dialogs {
     st.fontSize = (Integer) size.getValue();
     st.scrollback = (Integer) scrollback.getValue();
     st.notify = notify.isSelected();
+    st.restore = restore.isSelected();
+    st.autoUpdate = update.isSelected();
     // Désactiver SSH ferme les tunnels ; les discussions SSH restent dans la liste.
     if (st.ssh != ssh.isSelected()) {
       st.ssh = ssh.isSelected();
