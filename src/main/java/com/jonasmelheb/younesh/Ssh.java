@@ -9,7 +9,7 @@ import javax.swing.BoxLayout;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
-import javax.swing.JFileChooser;
+import com.formdev.flatlaf.util.SystemFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JPasswordField;
@@ -23,7 +23,6 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Cursor;
 import java.awt.Dimension;
-import java.awt.Font;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.Taskbar;
@@ -214,9 +213,9 @@ final class Ssh {
     Ui.Btn b = new Ui.Btn("Parcourir…", Ui.Kind.NORMAL);
     b.addActionListener(e -> {
       String start = target.getText().isBlank() ? Path.of(System.getProperty("user.home"), ".ssh").toString() : target.getText();
-      JFileChooser fc = new JFileChooser(start);
+      SystemFileChooser fc = new SystemFileChooser(start);
       fc.setFileHidingEnabled(false);
-      if (fc.showOpenDialog(app) == JFileChooser.APPROVE_OPTION) target.setText(fc.getSelectedFile().getAbsolutePath());
+      if (fc.showOpenDialog(app) == SystemFileChooser.APPROVE_OPTION) target.setText(fc.getSelectedFile().getAbsolutePath());
     });
     return b;
   }
@@ -581,7 +580,7 @@ final class Ssh {
       area.setEditable(false);
       area.setLineWrap(true);
       area.setWrapStyleWord(false);
-      area.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 11));
+      area.setFont(Ui.mono(11));
       area.setBackground(Ui.t().bg);
       area.setForeground(Ui.t().text);
       area.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(Ui.t().border), BorderFactory.createEmptyBorder(8, 10, 8, 10)));

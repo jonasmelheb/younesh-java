@@ -7,7 +7,7 @@ import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JDialog;
-import javax.swing.JFileChooser;
+import com.formdev.flatlaf.util.SystemFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JPanel;
@@ -50,9 +50,9 @@ final class Dialogs {
   static Ui.Btn browse(Younesh app, JTextField target) {
     Ui.Btn b = new Ui.Btn("Parcourir…", Ui.Kind.NORMAL);
     b.addActionListener(e -> {
-      JFileChooser fc = new JFileChooser(target.getText().isBlank() ? System.getProperty("user.home") : target.getText());
-      fc.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
-      if (fc.showOpenDialog(app) == JFileChooser.APPROVE_OPTION) target.setText(fc.getSelectedFile().getAbsolutePath());
+      SystemFileChooser fc = new SystemFileChooser(target.getText().isBlank() ? System.getProperty("user.home") : target.getText());
+      fc.setFileSelectionMode(SystemFileChooser.DIRECTORIES_ONLY);
+      if (fc.showOpenDialog(app) == SystemFileChooser.APPROVE_OPTION) target.setText(fc.getSelectedFile().getAbsolutePath());
     });
     return b;
   }

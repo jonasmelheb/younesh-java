@@ -64,11 +64,21 @@ final class Ui {
   }
 
   // « Segoe UI Variable », « Segoe UI », system-ui : 13 px, comme :root dans styles.css.
-  static final String UI_FONT = firstFont("Segoe UI Variable Text", "Segoe UI", ".AppleSystemUIFont", "SF Pro Text", "Helvetica Neue", "Dialog");
+  static final String UI_FONT = firstFont("Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", ".AppleSystemUIFont", "SF Pro Text", "Helvetica Neue", "Dialog");
+
+  // Tout le texte de l'interface est agrandi dans la même proportion : 13 px deviennent 14 px.
+  private static final float UI_SCALE = 14f / 13f;
 
   static Font font(float size, boolean bold) {
     // StyleContext donne une police avec le repli du système (symboles ✳ ⎇ ▶ absents de Segoe UI).
-    return StyleContext.getDefaultStyleContext().getFont(UI_FONT, bold ? Font.BOLD : Font.PLAIN, 13).deriveFont(size);
+    return StyleContext.getDefaultStyleContext().getFont(UI_FONT, bold ? Font.BOLD : Font.PLAIN, 13).deriveFont(size * UI_SCALE);
+  }
+
+  // Police à chasse fixe du terminal, aussi pour les zones de code des fenêtres (Font.MONOSPACED donne Courier New).
+  static final String MONO_FONT = firstFont("Cascadia Mono", "Cascadia Code", "Consolas", "Menlo", Font.MONOSPACED);
+
+  static Font mono(float size) {
+    return new Font(MONO_FONT, Font.PLAIN, 12).deriveFont(size * UI_SCALE);
   }
 
   // Lissage du texte : ClearType sous Windows, bien plus net sur un écran externe que le lissage en gris.

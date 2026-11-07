@@ -22,6 +22,7 @@ import javax.swing.BorderFactory;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.KeyStroke;
+import javax.swing.Timer;
 import javax.swing.text.StyleContext;
 import java.awt.BorderLayout;
 import java.awt.Desktop;
@@ -29,6 +30,7 @@ import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
+import java.awt.RenderingHints;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.net.URI;
@@ -54,6 +56,9 @@ final class Term {
   volatile boolean awaiting;   // Claude a répondu depuis la dernière frappe
   volatile boolean inClaude;   // Claude Code tourne dans ce terminal : son titre commence par « ✳ »
   boolean unread, attention;
+  volatile String outTail = "";   // fin de la sortie, pour repérer « API Usage Billing »
+  volatile String gitTail = "";   // fin de la sortie, pour repérer « Git remote … is not ready » (GitFix)
+  volatile boolean loginOffered;
   String cwdTail = "";   // fin de la dernière sortie : une annonce de dossier peut être coupée en deux
 
   private static final Pattern CLAUDE_TITLE = Pattern.compile("^[^\\p{L}\\p{N}\\s]\\s+.+$");
@@ -71,9 +76,10 @@ final class Term {
       @Override
       protected TerminalPanel createTerminalPanel(SettingsProvider provider, StyleState style, TerminalTextBuffer buffer) {
         return new TerminalPanel(provider, buffer, style) {
+          // Lissage en gris, comme Windows Terminal : pas de franges colorées sur le texte du terminal.
           @Override
           protected void setupAntialiasing(Graphics g) {
-            if (g instanceof Graphics2D g2) Ui.textHints(g2);
+            if (g instanceof Graphics2D g2) g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
           }
         };
       }
@@ -148,7 +154,78 @@ final class Term {
     onClose = r;
   }
 
+  // Une sandbox existante met parfois une minute à démarrer, écran noir compris : une pastille l'indique
+  // jusqu'à ce que Claude s'affiche, que le processus s'arrête, ou au bout de 5 minutes.
+  private final JLabel loadText = Ui.label("", 13, null);
+  private JPanel loadBar;
+  private Timer loadTimer;
+  private volatile boolean loading;
+  private String loadTail = "";
+  private static final Pattern ESCAPES = Pattern.compile("\u001b\\[[0-9;?<>=]*[A-Za-z]|\u001b\\][^\u0007\u001b]*(?:\u0007|\u001b\\\\)");
+
+  void showLoading(String what) {
+    if (loadBar == null) {
+      loadBar = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
+      loadBar.setOpaque(false);
+      loadBar.setBorder(BorderFactory.createEmptyBorder(4, 0, 8, 0));
+      JPanel pill = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0)) {
+        @Override
+        protected void paintComponent(Graphics g0) {
+          Graphics2D g = Ui.smooth(g0);
+          Theme t = Ui.t();
+          g.setColor(t.panel2);
+          g.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, getHeight(), getHeight());
+          g.setColor(t.border);
+          g.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, getHeight(), getHeight());
+          g.dispose();
+        }
+      };
+      pill.setOpaque(false);
+      pill.setBorder(BorderFactory.createEmptyBorder(6, 14, 6, 14));
+      pill.add(loadText);
+      loadBar.add(pill);
+    }
+    hideLoading();
+    loading = true;
+    loadTail = "";
+    long start = System.currentTimeMillis();
+    String[] dots = {"·  ", "·· ", "···"};
+    Runnable tick = () -> {
+      long s = (System.currentTimeMillis() - start) / 1000;
+      if (s >= 300) hideLoading();
+      else loadText.setText(what + " " + dots[(int) (s % 3)] + "  " + s + " s");
+    };
+    tick.run();
+    loadTimer = new Timer(1000, e -> tick.run());
+    loadTimer.start();
+    view.add(loadBar, BorderLayout.NORTH);
+    view.revalidate();
+    view.repaint();
+  }
+
+  void watchLoading(char[] buf, int off, int len) {
+    if (!loading) return;
+    String tail = loadTail + new String(buf, off, len);
+    loadTail = tail.substring(Math.max(0, tail.length() - 300));
+    // L'en-tête « Claude Code » n'arrive pas toujours d'un bloc (reprise d'une conversation, espaces remplacés par des
+    // déplacements du curseur) : la zone de saisie de Claude (lignes ─── et ❯) suffit aussi.
+    String text = ESCAPES.matcher(tail).replaceAll("");
+    if (text.replace(" ", "").contains("ClaudeCode") || text.contains("───") || text.contains("❯"))
+      javax.swing.SwingUtilities.invokeLater(this::hideLoading);
+  }
+
+  void hideLoading() {
+    loading = false;
+    if (loadTimer != null) loadTimer.stop();
+    if (loadBar != null && loadBar.getParent() == view) {
+      view.remove(loadBar);
+      view.revalidate();
+      view.repaint();
+    }
+  }
+
   void showExit(int code) {
+    hideLoading();
     boolean ssh = "ssh".equals(session.kind);
     exitText.setText((ssh ? "Connexion fermée" : "Processus terminé") + (code != 0 ? " (code " + code + ")" : ""));
     restart.setText(ssh ? "Se reconnecter" : "Relancer");
@@ -209,6 +286,26 @@ final class Term {
     @Override
     public void reset() {
       setCurrent(TextStyle.EMPTY);
+    }
+
+    // Les couleurs exactes (RGB, 256 couleurs) ne passent pas par la palette, donc pas par Theme.readable :
+    // le gris pâle de sbx restait peu lisible. On leur applique le même contraste minimum, comme la version Electron.
+    @Override
+    public void setCurrent(TextStyle style) {
+      TerminalColor fg = style.getForeground();
+      if (fg == null || fg.isIndexed() || style.hasOption(TextStyle.Option.INVERSE)) {
+        super.setCurrent(style);
+        return;
+      }
+      Theme t = Ui.t();
+      TerminalColor bgc = style.getBackground();
+      java.awt.Color bg = bgc == null ? t.termBg : bgc.isIndexed() ? t.ansi[bgc.getColorIndex()] : awt(bgc.toColor());
+      com.jediterm.core.Color c = Theme.readable(awt(fg.toColor()), bg);
+      super.setCurrent(style.toBuilder().setForeground(TerminalColor.rgb(c.getRed(), c.getGreen(), c.getBlue())).build());
+    }
+
+    private static java.awt.Color awt(com.jediterm.core.Color c) {
+      return new java.awt.Color(c.getRed(), c.getGreen(), c.getBlue());
     }
 
     @Override

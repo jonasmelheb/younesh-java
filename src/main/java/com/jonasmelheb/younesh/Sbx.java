@@ -13,23 +13,26 @@ import javax.swing.BoxLayout;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
-import javax.swing.JFileChooser;
+import com.formdev.flatlaf.util.SystemFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JPasswordField;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
+import javax.swing.JTextPane;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
-import javax.swing.filechooser.FileNameExtensionFilter;
+import javax.swing.text.BadLocationException;
+import javax.swing.text.SimpleAttributeSet;
+import javax.swing.text.StyleConstants;
+import javax.swing.text.StyledDocument;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
-import java.awt.Font;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.event.KeyAdapter;
@@ -140,6 +143,30 @@ final class Sbx {
     return out.toString();
   }
 
+  // Image de la sandbox d'une discussion, pour la barre du haut : null si ce n'est pas une sandbox.
+  // sbx ne la donne pas (sbx ls) : seule celle retenue à la création est connue.
+  static String image(Store.Session s) {
+    if (s.sbx == null) return null;
+    if (s.sbx.image == null) s.sbx.image = recordedImage(s.sbx.projet);
+    if (s.sbx.image == null) return "non enregistrée";
+    return s.sbx.image.isEmpty() ? "par défaut" : s.sbx.image;
+  }
+
+  // sbx garde la description de chaque sandbox dans …\DockerSandboxes\sandboxes\state\sandboxd\runtimes\<nom>.json :
+  // « Spec.Template » est l'image. Seul ce champ est lu. null si le fichier est absent ou illisible.
+  private static String recordedImage(String projet) {
+    String local = System.getenv("LOCALAPPDATA");
+    if (local == null || projet == null || !projet.matches("[\\w.-]+")) return null;
+    Path file = Path.of(local, "DockerSandboxes", "sandboxes", "state", "sandboxd", "runtimes", projet + ".json");
+    try {
+      JsonObject spec = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8)).getAsJsonObject().getAsJsonObject("Spec");
+      JsonElement template = spec == null ? null : spec.get("Template");
+      return template == null || template.isJsonNull() ? "" : template.getAsString();
+    } catch (IOException | RuntimeException e) {
+      return null;
+    }
+  }
+
   private static String imageOf(String create) {
     Matcher m = Pattern.compile("\\s--template=(\\S+)").matcher(create);
     return m.find() ? m.group(1) : "";
@@ -152,9 +179,16 @@ final class Sbx {
 
   static String startup(Config cfg, Store.Session s, Shells.Shell shell) {
     Map<String, String> vars = Map.of("projet", s.sbx.projet, "dossier", "\"" + s.cwd + "\"");
-    if (!s.sbx.created) return fill(s.sbx.image == null ? cfg.cli.create : createWithImage(cfg.cli.create, s.sbx.image), vars);
+    if (!s.sbx.created) {
+      String create = s.sbx.image == null ? cfg.cli.create : createWithImage(cfg.cli.create, s.sbx.image);
+      // --clone copie un dépôt git : sans dépôt dans le dossier, la création échoue. On l'enlève.
+      if (!Files.exists(Path.of(s.cwd, ".git"))) create = create.replaceAll("\\s--clone\\b", "");
+      return fill(create, vars);
+    }
     String open = fill(cfg.cli.open, vars);
     if (open.contains(" -- ") || !cfg.cli.create.matches(".*\\bclaude\\b.*")) return open;
+    // Sans message envoyé, pas de conversation : --continue échoue et la relance de secours reste bloquée (écran noir).
+    if (Boolean.FALSE.equals(s.sbx.talked)) return open;
     // Reprend la dernière conversation de la sandbox ; s'il n'y en a pas encore, Claude démarre normalement.
     String resume = open + " -- --continue";
     return "powershell".equals(shell.family()) ? resume + "; if (-not $?) { " + open + " }" : resume + " || " + open;
@@ -259,6 +293,7 @@ final class Sbx {
     s.folderId = folderId;
     s.sbx = new Store.SbxRef(projet, false);
     s.sbx.image = image;
+    s.sbx.talked = false;
     app.createSession(s);
     if (!items.isEmpty()) {
       Store.Session h = helper(app, "Installation · " + projet, dir, folderId, installCommand(config(app.store.settings), projet, items), false);
@@ -504,7 +539,7 @@ final class Sbx {
     JTextField label = Ui.input(item == null ? "" : item.label, "Plugin de l'équipe");
     JTextArea script = new JTextArea(item == null ? "" : item.script, 4, 40);
     script.setLineWrap(true);
-    script.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+    script.setFont(Ui.mono(12));
     script.setBackground(Ui.t().bg);
     script.setForeground(Ui.t().text);
     script.setCaretColor(Ui.t().text);
@@ -722,7 +757,7 @@ final class Sbx {
     info.setOpaque(false);
     info.add(textLabel(step.label, 13));
     JLabel code = Ui.label(step.cmd, 11, null);
-    code.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 11));
+    code.setFont(Ui.mono(11));
     info.add(code);
     Ui.Btn run = new Ui.Btn("Lancer", Ui.Kind.NORMAL);
     run.addActionListener(e -> {
@@ -800,15 +835,76 @@ final class Sbx {
     }
   }
 
+  // Éditeur JSON coloré (clés, chaînes, nombres, true/false/null), sans retour à la ligne automatique.
+  private static final Pattern JSON_TOKEN = Pattern.compile("(\"(?:[^\"\\\\\\n]|\\\\.)*\")(\\s*:)?|(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)|\\b(true|false|null)\\b|([{}\\[\\],:])");
+
+  private static JTextPane jsonEditor(String text) {
+    JTextPane pane = new JTextPane() {
+      @Override
+      public boolean getScrollableTracksViewportWidth() {
+        return getParent() == null || getUI().getPreferredSize(this).width <= getParent().getWidth();
+      }
+    };
+    pane.putClientProperty(JTextPane.HONOR_DISPLAY_PROPERTIES, true);
+    pane.setText(text);
+    Runnable color = () -> {
+      Theme t = Ui.t();
+      StyledDocument doc = pane.getStyledDocument();
+      String s;
+      try {
+        s = doc.getText(0, doc.getLength());
+      } catch (BadLocationException e) {
+        return;
+      }
+      doc.setCharacterAttributes(0, s.length(), style(t.text), true);
+      Matcher mt = JSON_TOKEN.matcher(s);
+      while (mt.find()) {
+        int g = mt.group(1) != null ? (mt.group(2) != null ? 1 : 2) : mt.group(3) != null ? 3 : mt.group(4) != null ? 4 : 5;
+        Color c = switch (g) {
+          case 1 -> t.accentSoft;
+          case 2 -> Theme.OK;
+          case 3 -> Theme.ORANGE;
+          case 4 -> Theme.SSH;
+          default -> t.muted;
+        };
+        int end = g == 1 ? mt.end(1) : mt.end();
+        doc.setCharacterAttributes(mt.start(), end - mt.start(), style(c), true);
+      }
+    };
+    color.run();
+    // Les changements de couleur ne déclenchent ni insertUpdate ni removeUpdate : pas de boucle.
+    pane.getDocument().addDocumentListener(new DocumentListener() {
+      @Override
+      public void insertUpdate(DocumentEvent e) {
+        SwingUtilities.invokeLater(color);
+      }
+
+      @Override
+      public void removeUpdate(DocumentEvent e) {
+        SwingUtilities.invokeLater(color);
+      }
+
+      @Override
+      public void changedUpdate(DocumentEvent e) {
+      }
+    });
+    return pane;
+  }
+
+  private static SimpleAttributeSet style(Color c) {
+    SimpleAttributeSet a = new SimpleAttributeSet();
+    StyleConstants.setForeground(a, c);
+    return a;
+  }
+
   static void configure(Younesh app) {
     Store.Settings st = app.store.settings;
     Ui.Modal m = new Ui.Modal(app, "Configurer sbx", "Enregistrer");
     m.width = 760;
     m.field(null, Ui.label("<html><div style='width:620px'><b>cli</b> : les commandes sbx (à changer seulement si sbx évolue). <b>setup</b> : la préparation du poste. "
       + "<b>installs</b> : ce qu'on peut installer dans une sandbox.<br>Variables : {projet}, {dossier}, {script}, {secret:NOM}.</div></html>", 12, null));
-    JTextArea area = new JTextArea(GSON.toJson(config(st)));
-    area.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
-    area.setTabSize(2);
+    JTextPane area = jsonEditor(GSON.toJson(config(st)));
+    area.setFont(Ui.mono(12));
     area.setBackground(Ui.t().bg);
     area.setForeground(Ui.t().text);
     area.setCaretColor(Ui.t().text);
@@ -823,9 +919,9 @@ final class Sbx {
 
     Ui.Btn imp = new Ui.Btn("Importer…", Ui.Kind.NORMAL);
     imp.addActionListener(e -> {
-      JFileChooser fc = new JFileChooser();
-      fc.setFileFilter(new FileNameExtensionFilter("JSON", "json"));
-      if (fc.showOpenDialog(m) != JFileChooser.APPROVE_OPTION) return;
+      SystemFileChooser fc = new SystemFileChooser();
+      fc.setFileFilter(new SystemFileChooser.FileNameExtensionFilter("JSON", "json"));
+      if (fc.showOpenDialog(m) != SystemFileChooser.APPROVE_OPTION) return;
       try {
         String text = Files.readString(fc.getSelectedFile().toPath(), StandardCharsets.UTF_8);
         Config c = parse(text, error);
@@ -838,9 +934,9 @@ final class Sbx {
     Ui.Btn exp = new Ui.Btn("Exporter…", Ui.Kind.NORMAL);
     exp.addActionListener(e -> {
       if (parse(area.getText(), error) == null) return;
-      JFileChooser fc = new JFileChooser();
+      SystemFileChooser fc = new SystemFileChooser();
       fc.setSelectedFile(new java.io.File("younesh-sbx.json"));
-      if (fc.showSaveDialog(m) != JFileChooser.APPROVE_OPTION) return;
+      if (fc.showSaveDialog(m) != SystemFileChooser.APPROVE_OPTION) return;
       try {
         Files.writeString(fc.getSelectedFile().toPath(), area.getText(), StandardCharsets.UTF_8);
       } catch (IOException ex) {
