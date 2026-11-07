@@ -645,14 +645,12 @@ final class Younesh extends JFrame implements Sidebar.Actions {
   // Claude connecté par clé d'API et non par l'abonnement : on propose une fois de taper /login dans cet onglet.
   // Les anciennes versions affichent « API Usage Billing », les récentes « … · Claude API » dans l'en-tête
   // (« Opus 5 with medium effort · Claude API »), là où un abonnement affiche « · Claude Pro » ou « · Claude Max ».
-  private static final Pattern ANSI = Pattern.compile("\u001b\\[[0-9;?]*[A-Za-z]");
-  private static final Pattern CURSOR_RIGHT = Pattern.compile("\u001b\\[\\d*C");
   private static final Pattern API_BILLING = Pattern.compile("API Usage Billing|\\u00b7\\s*Claude API(?![\\w-])");
 
+  // Texte nu, comme pour SSH : sauts de curseur remis en espaces et retours à la ligne, titre de fenêtre (OSC)
+  // et autres séquences retirés.
   static boolean apiBilling(String output) {
-    // Le terminal avance parfois le curseur au lieu d'écrire des espaces : on les remet avant de chercher.
-    String text = ANSI.matcher(CURSOR_RIGHT.matcher(output).replaceAll(" ")).replaceAll("");
-    return API_BILLING.matcher(text).find();
+    return API_BILLING.matcher(Ssh.plainText(output)).find();
   }
 
   private void watchApiBilling(Term t, char[] buf, int off, int len) {

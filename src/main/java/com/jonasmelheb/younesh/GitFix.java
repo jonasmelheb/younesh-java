@@ -10,6 +10,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
+import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -43,19 +45,24 @@ final class GitFix {
     List<ProcessHandle> killed = new ArrayList<>();
     for (ProcessHandle p : ProcessHandle.allProcesses().toList()) {
       ProcessHandle.Info info = p.info();
-      boolean git = info.command().map(c -> c.toLowerCase().endsWith("\\git.exe") || c.equalsIgnoreCase("git.exe")).orElse(false);
-      if (!git || p.parent().isPresent()) continue;
+      if (!info.command().map(GitFix::isGit).orElse(false) || p.parent().isPresent()) continue;
       Duration cpu = info.totalCpuDuration().orElse(null);
       Instant start = info.startInstant().orElse(null);
       if (holdsLock(cpu, start, locked) && p.destroyForcibly()) killed.add(p);
     }
-    releaseLock(lock, locked, killed);
+    releaseLock(lock, locked, killed, () -> gitAliveInWindow(locked, GitFix::isGit));
     return killed.size();
   }
 
-  // Supprime le verrou seulement si un git a été arrêté pour lui, que ce git est bien mort, et que personne
-  // n'a reposé le verrou depuis (sa date n'a pas changé). Un verrou dont le git vit encore n'est jamais touché.
-  static boolean releaseLock(Path lock, Instant locked, List<ProcessHandle> killed) {
+  static boolean isGit(String command) {
+    String c = command.toLowerCase();
+    return c.endsWith("\\git.exe") || c.equals("git.exe");
+  }
+
+  // Supprime le verrou seulement si un git a été arrêté pour lui, que ce git est bien mort, qu'aucun autre git
+  // lancé au même moment ne vit encore (il pourrait être le vrai détenteur, en train de travailler) et que
+  // personne n'a reposé le verrou depuis (sa date n'a pas changé). Un verrou dont le git vit encore n'est jamais touché.
+  static boolean releaseLock(Path lock, Instant locked, List<ProcessHandle> killed, BooleanSupplier otherGitAlive) {
     if (killed.isEmpty()) return false;
     for (ProcessHandle p : killed) {
       try {
@@ -66,6 +73,7 @@ final class GitFix {
       }
     }
     if (killed.stream().anyMatch(ProcessHandle::isAlive)) return false;
+    if (otherGitAlive.getAsBoolean()) return false;
     // Windows peut garder le fichier ouvert un court instant après la mort du processus.
     for (int i = 0; i < 5; i++) {
       try {
@@ -84,9 +92,24 @@ final class GitFix {
   // Le git bloqué pose le verrou juste après son lancement, puis ne tourne plus.
   static boolean holdsLock(Duration cpu, Instant start, Instant locked) {
     if (cpu == null || start == null) return false;
-    return cpu.compareTo(Duration.ofMillis(20)) < 0
-      && !start.isBefore(locked.minusSeconds(30))
-      && !start.isAfter(locked.plusSeconds(5));
+    return cpu.compareTo(Duration.ofMillis(20)) < 0 && inLockWindow(start, locked);
+  }
+
+  // Un git a pu poser ce verrou s'il a démarré entre 30 s avant et 5 s après lui.
+  static boolean inLockWindow(Instant start, Instant locked) {
+    return !start.isBefore(locked.minusSeconds(30)) && !start.isAfter(locked.plusSeconds(5));
+  }
+
+  // Un git encore vivant, orphelin ou non, qui a démarré dans cette fenêtre ? Par prudence, un git dont on ne
+  // peut pas lire l'heure de démarrage compte aussi.
+  static boolean gitAliveInWindow(Instant locked, Predicate<String> isGit) {
+    for (ProcessHandle p : ProcessHandle.allProcesses().toList()) {
+      ProcessHandle.Info info = p.info();
+      if (!p.isAlive() || !info.command().map(isGit::test).orElse(false)) continue;
+      Instant start = info.startInstant().orElse(null);
+      if (start == null || inLockWindow(start, locked)) return true;
+    }
+    return false;
   }
 
   // « Git remote sandbox-NOM is not ready … git://127.0.0.1:PORT/DEPOT » : on repose le remote nous-mêmes.
