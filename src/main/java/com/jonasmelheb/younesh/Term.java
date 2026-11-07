@@ -57,7 +57,7 @@ final class Term {
   volatile boolean awaiting;   // Claude a répondu depuis la dernière frappe
   volatile boolean inClaude;   // Claude Code tourne dans ce terminal : son titre commence par « ✳ »
   boolean unread, attention;
-  volatile String outTail = "";   // fin de la sortie, pour repérer « API Usage Billing »
+  volatile String outTail = "";   // fin de la sortie, pour repérer la facturation à l'API (Younesh.apiBilling)
   volatile String gitTail = "";   // fin de la sortie, pour repérer « Git remote … is not ready » (GitFix)
   volatile boolean loginOffered;
   String cwdTail = "";   // fin de la dernière sortie : une annonce de dossier peut être coupée en deux
