@@ -63,7 +63,7 @@ mvn package                 # construit target/Younesh.jar
 java -jar target/Younesh.jar
 ```
 
-Chaque tag `v*` construit le jar sur GitHub Actions et le publie dans une Release ([workflow](.github/workflows/build.yml)).
+Chaque tag `v*` construit le jar sur GitHub Actions et le publie dans une Release ([workflow](.github/workflows/build.yml)). La note de la Release reprend le message du commit taggé : son titre, puis son texte, à écrire pour les utilisateurs.
 
 Construit avec Swing, [FlatLaf](https://www.formdev.com/flatlaf/), [JediTerm](https://github.com/JetBrains/jediterm) et [pty4j](https://github.com/JetBrains/pty4j).
 
