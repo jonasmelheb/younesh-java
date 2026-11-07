@@ -30,7 +30,8 @@ final class GitFix {
   }
 
   // Arrête le git qui garde ce verrou : orphelin, qui n'a presque pas tourné, et lancé au moment où le verrou
-  // a été posé. Les autres git du PC, même orphelins, ne sont pas touchés.
+  // a été posé. Les autres git du PC, même orphelins, ne sont pas touchés. Un git tué ne supprime pas son
+  // verrou : on le supprime ensuite, une fois ce git bien arrêté.
   static int unlock(Path lock) {
     Instant locked;
     try {
@@ -39,16 +40,45 @@ final class GitFix {
       return 0;
     }
     if (locked.isAfter(Instant.now().minus(LOCK_AGE))) return 0;
-    int killed = 0;
+    List<ProcessHandle> killed = new ArrayList<>();
     for (ProcessHandle p : ProcessHandle.allProcesses().toList()) {
       ProcessHandle.Info info = p.info();
       boolean git = info.command().map(c -> c.toLowerCase().endsWith("\\git.exe") || c.equalsIgnoreCase("git.exe")).orElse(false);
       if (!git || p.parent().isPresent()) continue;
       Duration cpu = info.totalCpuDuration().orElse(null);
       Instant start = info.startInstant().orElse(null);
-      if (holdsLock(cpu, start, locked) && p.destroyForcibly()) killed++;
+      if (holdsLock(cpu, start, locked) && p.destroyForcibly()) killed.add(p);
     }
-    return killed;
+    releaseLock(lock, locked, killed);
+    return killed.size();
+  }
+
+  // Supprime le verrou seulement si un git a été arrêté pour lui, que ce git est bien mort, et que personne
+  // n'a reposé le verrou depuis (sa date n'a pas changé). Un verrou dont le git vit encore n'est jamais touché.
+  static boolean releaseLock(Path lock, Instant locked, List<ProcessHandle> killed) {
+    if (killed.isEmpty()) return false;
+    for (ProcessHandle p : killed) {
+      try {
+        p.onExit().get(5, TimeUnit.SECONDS);
+      } catch (Exception e) {
+        if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+        return false;
+      }
+    }
+    if (killed.stream().anyMatch(ProcessHandle::isAlive)) return false;
+    // Windows peut garder le fichier ouvert un court instant après la mort du processus.
+    for (int i = 0; i < 5; i++) {
+      try {
+        if (!Files.getLastModifiedTime(lock).toInstant().equals(locked)) return false;
+        Files.delete(lock);
+        return true;
+      } catch (java.nio.file.NoSuchFileException e) {
+        return false;
+      } catch (IOException e) {
+        sleep(300);
+      }
+    }
+    return false;
   }
 
   // Le git bloqué pose le verrou juste après son lancement, puis ne tourne plus.

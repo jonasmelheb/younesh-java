@@ -642,16 +642,25 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     });
   }
 
-  // Claude affiche « API Usage Billing » quand il est connecté par clé d'API et non par l'abonnement :
-  // on propose une fois de taper /login dans cet onglet.
+  // Claude connecté par clé d'API et non par l'abonnement : on propose une fois de taper /login dans cet onglet.
+  // Les anciennes versions affichent « API Usage Billing », les récentes « … · Claude API » dans l'en-tête
+  // (« Opus 5 with medium effort · Claude API »), là où un abonnement affiche « · Claude Pro » ou « · Claude Max ».
   private static final Pattern ANSI = Pattern.compile("\u001b\\[[0-9;?]*[A-Za-z]");
+  private static final Pattern CURSOR_RIGHT = Pattern.compile("\u001b\\[\\d*C");
+  private static final Pattern API_BILLING = Pattern.compile("API Usage Billing|\\u00b7\\s*Claude API(?![\\w-])");
+
+  static boolean apiBilling(String output) {
+    // Le terminal avance parfois le curseur au lieu d'écrire des espaces : on les remet avant de chercher.
+    String text = ANSI.matcher(CURSOR_RIGHT.matcher(output).replaceAll(" ")).replaceAll("");
+    return API_BILLING.matcher(text).find();
+  }
 
   private void watchApiBilling(Term t, char[] buf, int off, int len) {
     Store.Session s = t.session;
     if (t.loginOffered || !("claude".equals(s.kind) || "sandbox".equals(s.kind) || t.inClaude)) return;
     String tail = t.outTail + new String(buf, off, len);
     t.outTail = tail.substring(Math.max(0, tail.length() - 300));
-    if (!ANSI.matcher(tail).replaceAll("").contains("API Usage Billing")) return;
+    if (!apiBilling(tail)) return;
     t.loginOffered = true;
     SwingUtilities.invokeLater(() -> toast("« " + s.name + " » : Claude est facturé à l'API, pas sur ton abonnement.", 60000,
       "Taper /login", () -> {
