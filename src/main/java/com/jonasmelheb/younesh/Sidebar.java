@@ -53,7 +53,7 @@ final class Sidebar extends JComponent {
   }
 
   // Une discussion fait une ligne (le nom), ou deux quand le dossier est un dépôt git (la branche en dessous).
-  private static final int PAD = 6, HEAD_H = 27, ONE_LINE = 30, TWO_LINES = 42, LABEL_H = 30, BODY_X = 11, NESTED_X = 23;
+  private static final int PAD = 6, HEAD_H = 29, ONE_LINE = 32, TWO_LINES = 45, LABEL_H = 30, BODY_X = 11, NESTED_X = 23;
 
   private final Store store;
   private final Map<String, Term> terms;
@@ -570,7 +570,7 @@ final class Sidebar extends JComponent {
       long open = Ssh.openCount(store, s.id);
       String count = open > 0 ? "  ⇄ " + open : "";
       String server = ellipsize(sm, Ssh.label(s.ssh), right - x - sm.stringWidth(count));
-      int sy = r.y + 6 + 17 + sm.getAscent() - 1;
+      int sy = r.y + 6 + 19 + sm.getAscent() - 1;
       g.setColor(t.muted);
       g.drawString(server, x, sy);
       g.setColor(Theme.OK);
@@ -579,7 +579,7 @@ final class Sidebar extends JComponent {
       g.setFont(Ui.font(11, false));
       FontMetrics sm = g.getFontMetrics();
       g.setColor(t.accentSoft);
-      g.drawString(ellipsize(sm, "⎇ " + b, right - x), x, r.y + 6 + 17 + sm.getAscent() - 1);
+      g.drawString(ellipsize(sm, "⎇ " + b, right - x), x, r.y + 6 + 19 + sm.getAscent() - 1);
     }
 
     Ui.dot(g, r.x + rw - 8 - 4, cy, term, pulse);

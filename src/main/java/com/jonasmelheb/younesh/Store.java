@@ -47,6 +47,7 @@ public final class Store {
     public boolean created;
     public boolean removed;   // suppression demandée : l'onglet fermé ne se rouvre pas
     public String image;   // null : celle de la commande « create »
+    public Boolean talked; // false : sandbox créée ici, sans message envoyé à Claude ; null : inconnu (anciennes)
 
     SbxRef(String projet, boolean created) {
       this.projet = projet;

@@ -172,6 +172,12 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     });
     KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(this::shortcut);
     new Timer(500, e -> watchAttention()).start();
+    // git suspendus (voir GitFix) : nettoyés en arrière-plan, la liste des processus est lente à lire.
+    if (Shells.WIN) new Timer(15000, e -> {
+      Thread th = new Thread(GitFix::killStuck, "younesh-git-clean");
+      th.setDaemon(true);
+      th.start();
+    }).start();
     new Timer(4000, e -> refreshBranches()).start();
     if (!Shells.WIN) new Timer(5000, e -> pollCwds()).start();
     new Timer(60000, e -> saveBuffers()).start();
@@ -433,6 +439,7 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     String saved = buffers.remove(s.id);
     if (saved != null) pty.replay(saved + "\r\n\u001b[2m──── session précédente ────\u001b[0m\r\n");
     t.pty = pty;
+    if ("sandbox".equals(s.kind) && s.sbx != null) t.showLoading(s.sbx.created ? "Démarrage de la sandbox" : "Création de la sandbox");
     t.widget.setTtyConnector(pty);
     t.widget.start();
     t.running = true;
@@ -579,6 +586,9 @@ final class Younesh extends JFrame implements Sidebar.Actions {
 
   private void onOutput(Term t, char[] buf, int off, int len) {
     Sbx.watchInstall(this, t.session, buf, off, len);
+    t.watchLoading(buf, off, len);
+    GitFix.watch(this, t, buf, off, len);
+    watchApiBilling(t, buf, off, len);
     watchCwd(t, buf, off, len);
     long now = System.currentTimeMillis();
     t.lastOutput = now;
@@ -594,6 +604,24 @@ final class Younesh extends JFrame implements Sidebar.Actions {
         sidebar.repaint();
       }
     });
+  }
+
+  // Claude affiche « API Usage Billing » quand il est connecté par clé d'API et non par l'abonnement :
+  // on propose une fois de taper /login dans cet onglet.
+  private static final Pattern ANSI = Pattern.compile("\u001b\\[[0-9;?]*[A-Za-z]");
+
+  private void watchApiBilling(Term t, char[] buf, int off, int len) {
+    Store.Session s = t.session;
+    if (t.loginOffered || !("claude".equals(s.kind) || "sandbox".equals(s.kind) || t.inClaude)) return;
+    String tail = t.outTail + new String(buf, off, len);
+    t.outTail = tail.substring(Math.max(0, tail.length() - 300));
+    if (!ANSI.matcher(tail).replaceAll("").contains("API Usage Billing")) return;
+    t.loginOffered = true;
+    SwingUtilities.invokeLater(() -> toast("« " + s.name + " » : Claude est facturé à l'API, pas sur ton abonnement.", 60000,
+      "Taper /login", () -> {
+        activate(s);
+        type(s, "/login\r");
+      }));
   }
 
   // Claude se tait 3 s après avoir écrit : il attend une réponse.
@@ -728,7 +756,8 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     }
     title.setText(s.name);
     String b = branches.get(s.id);
-    path.setText(s.ssh != null ? Ssh.label(s.ssh) : Sidebar.shortPath(s.cwd) + (b != null ? "  ⎇ " + b : ""));
+    String image = Sbx.image(s);
+    path.setText(s.ssh != null ? Ssh.label(s.ssh) : Sidebar.shortPath(s.cwd) + (b != null ? "  ⎇ " + b : "") + (image != null ? "  ·  sbx : " + s.sbx.projet + "  ·  image : " + image : ""));
     setTitle(s.name + " — Younesh");
     activeDot.repaint();
   }
@@ -1063,6 +1092,11 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     if (active != null && SwingUtilities.isDescendingFrom(e.getComponent(), active.widget) && !e.isControlDown()) {
       active.lastInput = System.currentTimeMillis();
       active.awaiting = false;
+      Store.Session as = active.session;
+      if (e.getKeyCode() == KeyEvent.VK_ENTER && as.sbx != null && Boolean.FALSE.equals(as.sbx.talked)) {
+        as.sbx.talked = true;
+        save();
+      }
       if (active.attention) {
         active.attention = false;
         sidebar.repaint();
