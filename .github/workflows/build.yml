@@ -29,5 +29,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp target/Younesh.jar "Younesh-${GITHUB_REF_NAME#v}.jar"
-          gh release create "$GITHUB_REF_NAME" "Younesh-${GITHUB_REF_NAME#v}.jar" --title "Younesh (Java) $GITHUB_REF_NAME" --notes "Lancer avec : java -jar Younesh-${GITHUB_REF_NAME#v}.jar (Java 17 ou plus)."
+          VERSION="${GITHUB_REF_NAME#v}"
+          cp target/Younesh.jar "Younesh-$VERSION.jar"
+          # La note reprend le message du commit taggé, sans les lignes Co-Authored-By et Claude-Session.
+          {
+            echo "## $(git log -1 --format=%s)"
+            echo
+            git log -1 --format=%b | sed -e '/^Co-Authored-By:/d' -e '/^Claude-Session:/d'
+            echo
+            echo "## Installer"
+            echo
+            echo "Télécharger \`Younesh-$VERSION.jar\`, puis lancer \`java -jar Younesh-$VERSION.jar\` (Java 17 ou plus). Si Younesh est déjà installé, il se met à jour tout seul à la fermeture."
+          } > notes.md
+          gh release create "$GITHUB_REF_NAME" "Younesh-$VERSION.jar" --title "Younesh (Java) $GITHUB_REF_NAME" --notes-file notes.md
