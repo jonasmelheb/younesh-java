@@ -1,5 +1,6 @@
 package com.jonasmelheb.younesh;
 
+import com.jediterm.core.util.TermSize;
 import com.jediterm.core.Color;
 import com.jediterm.terminal.HyperlinkStyle;
 import com.jediterm.terminal.TerminalColor;
@@ -237,6 +238,22 @@ final class Term {
   void hideExit() {
     view.remove(exitBar);
     view.revalidate();
+  }
+
+  // Après un changement d'écran, l'affichage peut rester cassé tant que la taille de la fenêtre ne bouge pas :
+  // on redessine, et Claude, qui ne repeint qu'en cas de changement de taille, reçoit une ligne de moins puis la vraie taille.
+  void refreshDisplay() {
+    view.revalidate();
+    view.repaint();
+    widget.getTerminalPanel().repaint();
+    Pty p = pty;
+    if (!running || p == null || !("claude".equals(session.kind) || "sandbox".equals(session.kind) || inClaude)) return;
+    int cols = widget.getTerminalTextBuffer().getWidth(), rows = widget.getTerminalTextBuffer().getHeight();
+    if (rows < 2) return;
+    p.resize(new TermSize(cols, rows - 1));
+    Timer back = new Timer(150, e -> p.resize(new TermSize(cols, rows)));
+    back.setRepeats(false);
+    back.start();
   }
 
   void applyTheme(Theme t) {
