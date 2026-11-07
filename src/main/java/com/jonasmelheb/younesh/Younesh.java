@@ -46,6 +46,7 @@ import java.awt.event.WindowEvent;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -176,12 +177,8 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     });
     KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(this::shortcut);
     new Timer(500, e -> watchAttention()).start();
-    // git suspendus (voir GitFix) : nettoyés en arrière-plan, la liste des processus est lente à lire.
-    if (Shells.WIN) new Timer(15000, e -> {
-      Thread th = new Thread(GitFix::killStuck, "younesh-git-clean");
-      th.setDaemon(true);
-      th.start();
-    }).start();
+    // git suspendus (voir GitFix) : seulement pour les sandbox ouvertes, en arrière-plan.
+    if (Shells.WIN) new Timer(15000, e -> cleanSandboxLocks()).start();
     new Timer(4000, e -> refreshBranches()).start();
     if (!Shells.WIN) new Timer(5000, e -> pollCwds()).start();
     new Timer(60000, e -> saveBuffers()).start();
@@ -611,6 +608,16 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     Store.Session s = store.closed.remove(store.closed.size() - 1);
     store.sessions.add(s);
     activate(s);
+  }
+
+  // Rien à faire sans sandbox ouverte. Sinon, le test du verrou et la liste des processus partent en arrière-plan.
+  private void cleanSandboxLocks() {
+    List<String> dirs = new ArrayList<>();
+    for (Term t : terms.values()) if (t.running && t.session.sbx != null && t.session.cwd != null) dirs.add(t.session.cwd);
+    if (dirs.isEmpty()) return;
+    Thread th = new Thread(() -> GitFix.cleanLocks(dirs), "younesh-git-clean");
+    th.setDaemon(true);
+    th.start();
   }
 
   private void onOutput(Term t, char[] buf, int off, int len) {

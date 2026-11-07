@@ -1,6 +1,7 @@
 package com.jonasmelheb.younesh;
 
 import javax.swing.SwingUtilities;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -18,19 +19,44 @@ final class GitFix {
   private GitFix() {
   }
 
-  // Un git orphelin qui n'a jamais tourné depuis 30 s est bloqué : on l'arrête, ce qui libère le verrou.
-  static int killStuck() {
+  static final Duration LOCK_AGE = Duration.ofSeconds(30);
+
+  // Appelé toutes les 15 s, seulement pour les dépôts des sandbox ouvertes. Sans verrou, ou avec un verrou
+  // récent (un git peut travailler normalement), la liste des processus n'est même pas lue.
+  static int cleanLocks(List<String> dirs) {
     int killed = 0;
-    Instant old = Instant.now().minusSeconds(30);
+    for (String dir : dirs) killed += unlock(Path.of(dir, ".git", "config.lock"));
+    return killed;
+  }
+
+  // Arrête le git qui garde ce verrou : orphelin, qui n'a presque pas tourné, et lancé au moment où le verrou
+  // a été posé. Les autres git du PC, même orphelins, ne sont pas touchés.
+  static int unlock(Path lock) {
+    Instant locked;
+    try {
+      locked = Files.getLastModifiedTime(lock).toInstant();
+    } catch (IOException e) {
+      return 0;
+    }
+    if (locked.isAfter(Instant.now().minus(LOCK_AGE))) return 0;
+    int killed = 0;
     for (ProcessHandle p : ProcessHandle.allProcesses().toList()) {
       ProcessHandle.Info info = p.info();
       boolean git = info.command().map(c -> c.toLowerCase().endsWith("\\git.exe") || c.equalsIgnoreCase("git.exe")).orElse(false);
       if (!git || p.parent().isPresent()) continue;
-      boolean neverRan = info.totalCpuDuration().map(d -> d.compareTo(Duration.ofMillis(20)) < 0).orElse(false);
-      boolean stale = info.startInstant().map(t -> t.isBefore(old)).orElse(false);
-      if (neverRan && stale && p.destroyForcibly()) killed++;
+      Duration cpu = info.totalCpuDuration().orElse(null);
+      Instant start = info.startInstant().orElse(null);
+      if (holdsLock(cpu, start, locked) && p.destroyForcibly()) killed++;
     }
     return killed;
+  }
+
+  // Le git bloqué pose le verrou juste après son lancement, puis ne tourne plus.
+  static boolean holdsLock(Duration cpu, Instant start, Instant locked) {
+    if (cpu == null || start == null) return false;
+    return cpu.compareTo(Duration.ofMillis(20)) < 0
+      && !start.isBefore(locked.minusSeconds(30))
+      && !start.isAfter(locked.plusSeconds(5));
   }
 
   // « Git remote sandbox-NOM is not ready … git://127.0.0.1:PORT/DEPOT » : on repose le remote nous-mêmes.
@@ -55,7 +81,7 @@ final class GitFix {
   private static void repair(Younesh app, String dir, String remote, String port, String repo) {
     Path lock = Path.of(dir, ".git", "config.lock");
     for (int i = 0; i < 24 && Files.exists(lock); i++) {
-      killStuck();
+      unlock(lock);
       sleep(5000);
     }
     if (Files.exists(lock)) {
