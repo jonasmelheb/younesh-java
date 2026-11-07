@@ -28,6 +28,9 @@ import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
+import java.awt.GraphicsConfiguration;
+import java.awt.GraphicsDevice;
+import java.awt.GraphicsEnvironment;
 import java.awt.GridLayout;
 import java.awt.Image;
 import java.awt.KeyboardFocusManager;
@@ -78,6 +81,7 @@ final class Younesh extends JFrame implements Sidebar.Actions {
   private Ui.Btn quickBtn, sbxBtn, sshBtn, folderBtn;
   private final Ui.Btn tunnelsBtn = new Ui.Btn("", Ui.Kind.GHOST);
   private Timer toastTimer;
+  private String screens;
   private Runnable toastAction;
   private TrayIcon tray;
   private Image icon;
@@ -181,6 +185,8 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     new Timer(4000, e -> refreshBranches()).start();
     if (!Shells.WIN) new Timer(5000, e -> pollCwds()).start();
     new Timer(60000, e -> saveBuffers()).start();
+    screens = screenSignature();
+    new Timer(2000, e -> watchScreens()).start();
 
     applyTheme();
     refreshBranches();
@@ -377,6 +383,29 @@ final class Younesh extends JFrame implements Sidebar.Actions {
   }
 
   // ---------- Discussions ----------
+
+  // Écran branché ou débranché, fenêtre passée sur un autre écran. L'attente laisse Windows finir de la déplacer.
+  private void watchScreens() {
+    String now = screenSignature();
+    if (now.equals(screens)) return;
+    screens = now;
+    Timer refresh = new Timer(1000, e -> {
+      validate();
+      repaint();
+      for (Term t : terms.values()) t.refreshDisplay();
+    });
+    refresh.setRepeats(false);
+    refresh.start();
+  }
+
+  private String screenSignature() {
+    StringBuilder sig = new StringBuilder(getGraphicsConfiguration().getDevice().getIDstring());
+    for (GraphicsDevice d : GraphicsEnvironment.getLocalGraphicsEnvironment().getScreenDevices()) {
+      GraphicsConfiguration c = d.getDefaultConfiguration();
+      sig.append('|').append(d.getIDstring()).append(c.getBounds()).append(c.getDefaultTransform().getScaleX());
+    }
+    return sig.toString();
+  }
 
   private Term ensureTerm(Store.Session s) {
     return terms.computeIfAbsent(s.id, id -> {
