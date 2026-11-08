@@ -9,7 +9,6 @@ import javax.swing.BoxLayout;
 import javax.swing.JComponent;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
-import javax.swing.JLayeredPane;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
@@ -76,14 +75,12 @@ final class Younesh extends JFrame implements Sidebar.Actions {
   private final JComponent activeDot;
   private final JLabel title = Ui.label("", 13, null), path = Ui.label("", 12, null);
   private final JPanel empty = new JPanel(new BorderLayout());
-  private final JLabel toast = new JLabel();
+  private Toasts toasts;
   // Les boutons d'icônes à côté de la recherche, et le compteur de tunnels en bas : visibles seulement si SSH est activé.
   private final JPanel icons = new JPanel(new GridLayout(1, 0, 6, 0));
   private Ui.Btn quickBtn, sbxBtn, sshBtn, folderBtn;
   private final Ui.Btn tunnelsBtn = new Ui.Btn("", Ui.Kind.GHOST);
-  private Timer toastTimer;
   private String screens;
-  private Runnable toastAction;
   private TrayIcon tray;
   private Image icon;
 
@@ -134,18 +131,7 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     split.setDividerLocation(store.settings.sidebarWidth);
     add(split);
 
-    toast.setVisible(false);
-    toast.setOpaque(false);
-    toast.addMouseListener(new java.awt.event.MouseAdapter() {
-      @Override
-      public void mouseClicked(java.awt.event.MouseEvent e) {
-        if (toastAction == null) return;
-        Runnable run = toastAction;
-        toast.setVisible(false);
-        run.run();
-      }
-    });
-    getLayeredPane().add(toast, JLayeredPane.POPUP_LAYER);
+    toasts = new Toasts(getLayeredPane());
 
     if (store.bounds != null && store.bounds.length == 4) {
       setBounds(store.bounds[0], store.bounds[1], store.bounds[2], store.bounds[3]);
@@ -373,6 +359,7 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     empty.setBackground(theme.bg);
     split.setBackground(theme.border);
     getRootPane().putClientProperty(FlatClientProperties.TITLE_BAR_BACKGROUND, theme.panel);
+    if (toasts != null) toasts.restyle();
     getRootPane().putClientProperty(FlatClientProperties.TITLE_BAR_FOREGROUND, theme.muted);
     for (Term t : terms.values()) t.applyTheme(theme);
     sidebar.rebuild();
@@ -1195,35 +1182,13 @@ final class Younesh extends JFrame implements Sidebar.Actions {
     toast(text, 3500);
   }
 
-  // Un message avec action : un clic dessus la lance.
+  // Un message avec un bouton d'action. Les messages s'empilent : aucun ne recouvre les autres (voir Toasts).
   void toast(String text, int ms, String label, Runnable action) {
-    toast(text + "  ▸ " + label, ms);
-    toastAction = action;
-    toast.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
+    toasts.show(text, ms, label, action);
   }
 
   void toast(String text, int ms) {
-    toastAction = null;
-    toast.setCursor(java.awt.Cursor.getDefaultCursor());
-    String html = text.replace("&", "&amp;").replace("<", "&lt;");
-    toast.setText("<html><div style='padding:2px 4px'>" + html + "</div></html>");
-    toast.setFont(Ui.font(13, false));
-    // Un long message passe sur plusieurs lignes plutôt que de dépasser de la fenêtre.
-    if (toast.getPreferredSize().width > 640) toast.setText("<html><div style='padding:2px 4px;width:560px'>" + html + "</div></html>");
-    toast.setForeground(theme.text);
-    toast.setBorder(BorderFactory.createCompoundBorder(
-      BorderFactory.createCompoundBorder(BorderFactory.createMatteBorder(1, 3, 1, 1, theme.accent), BorderFactory.createLineBorder(theme.borderStrong, 0)),
-      BorderFactory.createEmptyBorder(8, 12, 8, 12)));
-    toast.setOpaque(true);
-    toast.setBackground(theme.panel2);
-    Dimension d = toast.getPreferredSize();
-    int w = Math.min(d.width, getLayeredPane().getWidth() - 32);
-    toast.setBounds((getLayeredPane().getWidth() - w) / 2, getLayeredPane().getHeight() - d.height - 22, w, d.height);
-    toast.setVisible(true);
-    if (toastTimer != null) toastTimer.stop();
-    toastTimer = new Timer(ms, e -> toast.setVisible(false));
-    toastTimer.setRepeats(false);
-    toastTimer.start();
+    toasts.show(text, ms, null, null);
   }
 
   boolean confirm(String msg) {
