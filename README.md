@@ -35,7 +35,7 @@ Younesh se met ensuite à jour tout seul : il télécharge la nouvelle version e
 - Points d'état : vert = en cours, bleu = nouvelle sortie, rouge = terminé, gris = pas démarré.
 - Tout est enregistré dans `%APPDATA%\younesh-java\younesh.json` (`~/.younesh-java` ailleurs).
 
-Pas encore porté depuis la version Electron : côte à côte, restauration du contenu, import/export, effet Mica.
+Pas encore porté depuis la version Electron : côte à côte, recherche dans le terminal, import/export, copie OSC 52, effet Mica.
 
 ## Raccourcis
 
